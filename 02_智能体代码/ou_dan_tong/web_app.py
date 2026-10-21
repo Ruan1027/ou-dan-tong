@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from store import Store
 from agent import handle_message
+from llm import LLM
 from sim_chats import (SCENARIO1_MOCK, SEED_MOCK, SCENARIO_NEW_MOCK,
                        SCENARIO_UPDATE_MOCK, SCENARIO_MISSING_MOCK,
                        SCENARIO_CONFLICT_MOCK, SCENARIO_ABNORMAL_MOCK)
@@ -22,9 +23,15 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 INDEX = os.path.join(ROOT, "static", "index.html")
 
 _store = Store()
-USE_MOCK = not (os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"))
-MODE_LABEL = "模拟模式（未配置 API Key，演示用预置数据）" if USE_MOCK \
-    else f"真实模式（{os.getenv('DEEPSEEK_MODEL', os.getenv('OPENAI_MODEL', 'LLM'))}）"
+# 模块四·3：有 key 时创建 LLM 实例，用于查询/简报口语化
+_llm = LLM() if (os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")) else None
+# OU_DEMO_MODE=1 时强制用 mock 数据（seed + 预置抽取），但 LLM 口语化照常——演示用
+_DEMO_MODE = os.getenv("OU_DEMO_MODE", "").lower() in ("1", "true", "yes", "on")
+USE_MOCK = (not (os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"))) or _DEMO_MODE
+MODE_LABEL = "模拟模式（未配置 API Key，演示用预置数据）" if USE_MOCK and not _llm \
+    else f"演示模式（Mock 数据 + LLM 口语化）" if _DEMO_MODE and _llm \
+    else f"真实模式（{os.getenv('DEEPSEEK_MODEL', os.getenv('OPENAI_MODEL', 'LLM'))}）" if _llm \
+    else "模拟模式（未配置 API Key，演示用预置数据）"
 if USE_MOCK:
     # 演示预置在途单：使冲突/更新/异常场景能命中 existing（模块二可见）
     _store.reset()
@@ -64,7 +71,7 @@ def _pick_mock(scenario, text):
 def do_chat(text, scenario=None):
     with _LOCK:
         mock = _pick_mock(scenario, text) if USE_MOCK else None
-        result = handle_message(text, _store, llm=None, mock=mock)
+        result = handle_message(text, _store, llm=_llm, mock=mock)
     result["ledger"] = ledger_state()
     return result
 

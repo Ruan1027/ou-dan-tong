@@ -10,6 +10,7 @@ SRC = os.path.join(HERE, "data", "chat_logs.json")
 OUT_DIR = os.path.join(HERE, "preview")
 OUT = os.path.join(OUT_DIR, "模块一_数据预览.html")
 
+# 场景类型 → 配色 / 角标（类型无关：未知类型回退默认色，不报错）
 TYPE_COLOR = {
     "新建订单": "#1d7ad9",
     "多次迭代更新": "#8a6de9",
@@ -17,6 +18,10 @@ TYPE_COLOR = {
     "矛盾冲突": "#dc2626",
     "明显异常": "#b91c1c",
     "动态演进": "#059669",
+    "任务派发": "#0ea5e9",
+    "取消订单": "#7c3aed",
+    "部分交付": "#ca8a04",
+    "价格报价": "#0891b2",
 }
 TYPE_MARK = {
     "新建订单": "新",
@@ -25,8 +30,15 @@ TYPE_MARK = {
     "矛盾冲突": "冲",
     "明显异常": "异",
     "动态演进": "演",
+    "任务派发": "务",
+    "取消订单": "销",
+    "部分交付": "付",
+    "价格报价": "价",
 }
 VT_COLOR = {"ok": "#059669", "missing": "#d97706", "conflict": "#dc2626", "abnormal": "#b91c1c"}
+
+# 我方角色（气泡靠右，蓝色）：业务员 / 仓库 / 车间 / 老板娘；其余按客户（靠左）
+MY_SPEAKERS = {"小陈", "老周", "财务小林", "车间张师傅", "老板娘"}
 
 
 def build_expected_html(exp, notes):
@@ -56,9 +68,18 @@ def main():
         data = json.load(f)
     groups = data["groups"]
 
-    # 内嵌数据供浏览器渲染（缩进最小化，避免转义问题，仅做引号/尖括号转义放在 JS 中用 textContent 输出，
-    # 这里只把 JSON 原样写入 script，HTML 侧全部用 createTextNode 渲染，杜绝注入）。
-    payload = json.dumps(data, ensure_ascii=False)
+    # 统计各类型数量，供筛选栏使用（类型无关：动态收集）
+    type_stats = {}
+    for g in groups:
+        type_stats[g["scene_type"]] = type_stats.get(g["scene_type"], 0) + 1
+    legend_items = "".join(
+        f'<span class="lg"><i style="background:{TYPE_COLOR.get(t, "#555")}"></i>{t} {c}</span>'
+        for t, c in type_stats.items()
+    )
+    filter_btns = "".join(
+        f'<button class="fb" data-type="{t}">{TYPE_MARK.get(t, "·")} {t} {c}</button>'
+        for t, c in type_stats.items()
+    )
 
     cards = []
     for g in groups:
@@ -70,7 +91,7 @@ def main():
 
         msgs_js = []
         for m in g["messages"]:
-            speaker_cls = "opp" if m["speaker"] in ("王总", "李姐", "赵老板") else "me"
+            speaker_cls = "me" if m["speaker"] in MY_SPEAKERS else "opp"
             msgs_js.append(
                 f'<div class="msg {speaker_cls}"><div class="who" style="color:{color}">{m["speaker"]}</div>'
                 f'<div class="tt">{m["time"]}</div><div class="text">{m["text"]}</div></div>'
@@ -80,7 +101,7 @@ def main():
         exp_html = build_expected_html(g.get("expected", {}), g.get("notes", []))
 
         cards.append(f"""
-<div class="card" data-sid="{g['scene_id']}">
+<div class="card" data-sid="{g['scene_id']}" data-type="{st}">
   <div class="card-head">
     <span class="mark" style="background:{color}">{mark}</span>
     <span class="sid">{g['scene_id']}</span>
@@ -110,13 +131,19 @@ def main():
           background:linear-gradient(120deg,#0f2a43,#144572); color:#fff; border-radius:12px; margin-bottom:16px; }}
   header h1 {{ font-size:20px; letter-spacing:1px; }}
   header .sub {{ font-size:12px; opacity:.8; }}
-  header .stats {{ margin-left:auto; display:flex; gap:10px; }}
+  header .stats {{ margin-left:auto; display:flex; gap:10px; flex-wrap:wrap; }}
   .stat {{ background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.22); padding:6px 12px; border-radius:20px; font-size:12px; }}
-  .legend {{ display:flex; gap:8px; flex-wrap:wrap; margin:10px 2px 14px; }}
+  .legend {{ display:flex; gap:8px; flex-wrap:wrap; margin:6px 2px 10px; }}
   .lg {{ font-size:12px; padding:4px 10px; border-radius:16px; border:1px solid #d7dee8; background:#fff; color:#334155; }}
   .lg i {{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }}
+  .filters {{ display:flex; gap:8px; flex-wrap:wrap; margin:0 2px 14px; align-items:center; }}
+  .fb {{ font-size:12px; padding:5px 12px; border-radius:18px; border:1px solid #cbd5e1; background:#fff; color:#334155; cursor:pointer; transition:.15s; }}
+  .fb:hover {{ border-color:#1d7ad9; color:#1d7ad9; }}
+  .fb.active {{ background:#1d7ad9; border-color:#1d7ad9; color:#fff; }}
+  .fb.all {{ font-weight:700; }}
   .card {{ background:#fff; border:1px solid #e2e8f0; border-radius:12px; margin-bottom:16px; overflow:hidden;
           box-shadow:0 1px 3px rgba(15,42,67,.06); }}
+  .card.hidden {{ display:none; }}
   .card-head {{ display:flex; align-items:center; gap:10px; padding:10px 14px; background:#fbfcfe;
                border-bottom:1px solid #eef2f7; flex-wrap:wrap; }}
   .mark {{ width:26px; height:26px; border-radius:8px; color:#fff; font-weight:700; font-size:13px;
@@ -161,25 +188,36 @@ def main():
     </div>
   </header>
   <div class="legend">
-    <span class="lg"><i style="background:#1d7ad9"></i>新建订单</span>
-    <span class="lg"><i style="background:#8a6de9"></i>多次迭代更新</span>
-    <span class="lg"><i style="background:#d97706"></i>缺失信息</span>
-    <span class="lg"><i style="background:#dc2626"></i>矛盾冲突</span>
-    <span class="lg"><i style="background:#b91c1c"></i>明显异常</span>
-    <span class="lg"><i style="background:#059669"></i>动态演进</span>
-    <span class="lg" style="margin-left:auto;color:#64748b">客户发言 · 我方发言</span>
+    {legend_items}
+  </div>
+  <div class="filters">
+    <button class="fb all active" data-type="__all__">全部 {len(groups)}</button>
+    {filter_btns}
   </div>
   {''.join(cards)}
   <footer>红线说明：页面展示全部为团队自建模拟群聊数据，企业名已作化名处理，不涉及任何真实企业信息。<br>
   右侧「预期效果」标注为模块二（抽取/校验）实现后的目标结果，供联调对照，非智能体实际输出。</footer>
 </div>
+<script>
+  document.querySelectorAll('.fb').forEach(function(b){{
+    b.addEventListener('click', function(){{
+      var t = this.getAttribute('data-type');
+      document.querySelectorAll('.fb').forEach(function(x){{ x.classList.remove('active'); }});
+      this.classList.add('active');
+      document.querySelectorAll('.card').forEach(function(c){{
+        if (t === '__all__' || c.getAttribute('data-type') === t) c.classList.remove('hidden');
+        else c.classList.add('hidden');
+      }});
+    }});
+  }});
+</script>
 </body>
 </html>"""
 
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"预览页已生成：{OUT}")
+    print(f"预览页已生成：{OUT}（{len(groups)} 组，含类型筛选）")
 
 
 if __name__ == "__main__":

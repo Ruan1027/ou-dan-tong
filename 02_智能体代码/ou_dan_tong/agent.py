@@ -4,7 +4,7 @@ import datetime
 from llm import LLM
 from prompts import card_text, query_text, briefing_text
 from store import Store
-from validator import validate_extraction, apply_change, classify_order
+from validator import validate_extraction, apply_change, classify_order, classify_task
 from contracts import CheckStatus
 from extractor import extract
 
@@ -59,6 +59,11 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
     new_tasks = []
     for t in tasks:
         t["task_id"] = store.next_task_id(date)
+        # 模块二·7 任务侧缺失追问（BUG-05 修复）：缺负责人/期限登记占位并追问
+        cls = classify_task(t)
+        if cls.status == CheckStatus.MISSING:
+            t.setdefault("flags", {})["missing"] = cls.message
+            cards.append("🟡 任务信息不全已占位：" + cls.message)
         if out:
             t["order_id"] = out[0][1]["order_id"]
         store.add_task(t)

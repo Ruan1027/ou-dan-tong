@@ -11,11 +11,11 @@
 import re
 import datetime
 
-from contracts import CheckStatus, ValidationResult
+from contracts import CheckStatus, ValidationResult, CHANGE_VERBS
 from prompts import STATUS_RANK
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_CHANGE_VERB_SET = ("改", "变更为", "调成", "调到", "更新为", "变为", "改成", "调整到")
+# 变更动词以 contracts.CHANGE_VERBS 为单一真相源（避免本地重复定义漂移，见 BUG-02 修复）
 _FIELD_CN = {"qty": "数量", "unit_price": "单价", "delivery_date": "交期", "status": "状态"}
 
 
@@ -40,7 +40,7 @@ def _parse_date(s):
 
 def _has_change_verb(text):
     t = text or ""
-    return any(v in t for v in _CHANGE_VERB_SET)
+    return any(v in t for v in CHANGE_VERBS)
 
 
 # ---------------------------------------------------------------------------
@@ -99,11 +99,18 @@ def apply_change(existing: dict, extracted: dict, now: str = None):
         if _meaningful(new) and str(new) != str(existing.get(field)):
             changes.append((field, existing.get(field), new))
             patch[field] = new
-    old_rank = STATUS_RANK.get(existing.get("status"), 0)
-    new_rank = STATUS_RANK.get(extracted.get("status"), 0)
-    if new_rank > old_rank:
-        changes.append(("status", existing.get("status"), extracted["status"]))
-        patch["status"] = extracted["status"]
+    # 占位单（待补充）补全：状态直接转正为抽取值，不走 rank 比较（BUG-01 修复）
+    if existing.get("status") == "待补充":
+        ns = extracted.get("status")
+        if ns and ns in STATUS_RANK:
+            changes.append(("status", existing.get("status"), ns))
+            patch["status"] = ns
+    else:
+        old_rank = STATUS_RANK.get(existing.get("status"), 0)
+        new_rank = STATUS_RANK.get(extracted.get("status"), 0)
+        if new_rank > old_rank:
+            changes.append(("status", existing.get("status"), extracted["status"]))
+            patch["status"] = extracted["status"]
     if changes:
         change = {
             "time": now,
@@ -169,10 +176,12 @@ def classify_order(o: dict, existing: dict = None, order_date: str = None) -> Va
             )
 
     # 2. 冲突检测（与在途单数值矛盾，且非显式「变更动词」→ 不覆盖，待确认）
-    if existing:
+    # 修复 BUG-01：占位单（status=待补充）补全时直接转正，不进冲突比对；
+    # 冲突比对收敛为数值类字段（移除 status，状态流转走状态机而非冲突判定）。
+    if existing and existing.get("status") != "待补充":
         verb = _has_change_verb(o.get("source_excerpt", "") or o.get("raw", ""))
         contradictions = []
-        for f in ("qty", "unit_price", "delivery_date", "status"):
+        for f in ("qty", "unit_price", "delivery_date"):
             ev = existing.get(f)
             nv = o.get(f)
             if _meaningful(ev) and _meaningful(nv) and str(ev) != str(nv) and not verb:
@@ -203,3 +212,22 @@ def classify_order(o: dict, existing: dict = None, order_date: str = None) -> Va
     patch = {f: o[f] for f in ("spec", "qty", "unit_price", "delivery_date", "sample_flag", "status")
              if f in o and _meaningful(o.get(f))}
     return ValidationResult(CheckStatus.OK, message="", patch=patch)
+
+
+def classify_task(t: dict) -> ValidationResult:
+    """模块二·7 任务侧缺失判定（BUG-05 修复）：缺负责人/期限则登记占位并追问，
+    与订单 missing 对称。返回契约 4 的 ValidationResult。"""
+    miss = []
+    if not (t.get("owner") or "").strip():
+        miss.append("负责人")
+    if not (t.get("deadline") or "").strip():
+        miss.append("期限")
+    if miss:
+        content = (t.get("content") or "").strip()
+        return ValidationResult(
+            CheckStatus.MISSING,
+            message="任务信息不全，已登记占位待补：" + "、".join(miss) + "缺失（" + content
+                    + "），请补全后我再正式排期。",
+            patch=None,
+        )
+    return ValidationResult(CheckStatus.OK, message="", patch=None)

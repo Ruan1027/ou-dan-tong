@@ -89,22 +89,213 @@ def query(question, store: Store, llm: LLM = None):
     q = question
     if any(k in q for k in ("简报", "今天情况", "今日", "今天有哪些", "整体")):
         return briefing(store, llm)
-    customers = sorted({o["customer"] for o in store.orders}, key=len, reverse=True)
-    target = next((c for c in customers if c[:2] in q or c in q), None)
-    res = store.query_orders(customer=target) if target else store.orders
-    if not res:
-        return "台账中没有找到相关订单，可尝试换称呼或查看全部在途订单。"
+
+    # ---- 模块四·4：历史追溯分支（识别"改过/历史/变更/履历/几次"等意图）----
+    _HISTORY_MARKERS = ("改过", "历史", "变更", "履历", "几次", "改了什么", "改了啥",
+                        "变更记录", "变更历史", "改动", "修改记录", "怎么改的")
+    is_history_query = any(k in q for k in _HISTORY_MARKERS)
+
+    # ---- 模块四·1：查询解析增强（命中键 客户/产品/规格/状态 + 时间区间 + 相关度排序）----
+    # 1. 状态关键词映射
+    status_keywords = {
+        "沟通中": ["沟通中", "待报价", "刚下单", "新单"],
+        "已报价": ["已报价", "报过价", "报价"],
+        "已确认": ["已确认", "确认了", "下单了"],
+        "生产中": ["生产中", "在生产", "排产", "做货", "在做"],
+        "已交付": ["已交付", "已发货", "发了", "送了", "交付"],
+    }
+    target_status = None
+    for st, kws in status_keywords.items():
+        if any(k in q for k in kws):
+            target_status = st
+            break
+
+    # 2. 时间区间解析（今天/本周/上周/最近N天/近N天）→ 返回 (start, end) 作用于 created_on
+    date_range = _parse_date_range(q)
+
+    # 3. 多字段命中：客户 / 产品 / 规格；每单计算命中字段集合，按命中数排序
+    candidates = []  # (order, hit_fields:set)
+    for o in store.orders:
+        hits = set()
+        cust = o.get("customer") or ""
+        prod = o.get("product") or ""
+        spec = o.get("spec") or ""
+        # 客户名匹配：全名 / 前2字前缀（但排除"客户/公司/厂家"等泛词前缀，避免"客户A/B/C"互相误命中）
+        if cust:
+            if cust in q:
+                hits.add("客户")
+            else:
+                # 前2字前缀匹配，泛词前缀降级为前3字
+                _GENERIC_PREFIXES = ("客户", "公司", "厂家", "老板", "经理")
+                prefix_len = 3 if cust[:2] in _GENERIC_PREFIXES else 2
+                if len(cust) >= prefix_len and cust[:prefix_len] in q:
+                    hits.add("客户")
+        # 产品名匹配：全名 / 任一≥2字片段（产品名常带型号，如 NMX-60）
+        if prod:
+            if prod in q:
+                hits.add("产品")
+            else:
+                # 滑窗匹配产品名中长度≥3的子串（防短词误命中）
+                for i in range(len(prod) - 2):
+                    if prod[i:i+3] in q:
+                        hits.add("产品")
+                        break
+        # 规格匹配：仅当规格非空且≥2字
+        if spec and len(spec) >= 2 and spec in q:
+            hits.add("规格")
+        # 状态命中
+        if target_status and o.get("status") == target_status:
+            hits.add("状态")
+        # 时间区间命中：created_on 落在区间内
+        if date_range:
+            start, end = date_range
+            created = (o.get("created_at") or "")[:10]
+            if start <= created <= end:
+                hits.add("时间")
+        if hits:
+            candidates.append((o, hits))
+
+    # 4. 无任何命中 → 兜底返回全部在途（保留原引导语义）
+    if not candidates:
+        in_progress = [o for o in store.orders if o.get("status") != "已交付"]
+        if not in_progress:
+            return "台账中没有找到相关订单，可尝试换称呼、按产品问（如「NMX-60 到哪了」），或查看全部在途订单。"
+        return "未命中具体客户/产品/状态，以下是全部在途订单：\n" + "\n".join(
+            _highlight_query_text(o, _suggest(o)) for o in in_progress
+        )
+
+    # 5. 相关度排序：命中字段数降序 → 更新时间倒序
+    candidates.sort(key=lambda x: (-len(x[1]), x[0].get("updated_at", "")), reverse=False)
+    candidates.sort(key=lambda x: -len(x[1]))  # 主排序：命中数降序
+
+    # 6. 输出：每条标注命中字段；用户问"最新"时加"最新状态"强调
+    is_latest_query = any(k in q for k in ("最新", "现在", "目前", "当下", "当前状态"))
+    prefix = "📌 最新状态：\n" if is_latest_query else ""
+
+    # 模块四·4：历史追溯分支 —— 用户问"改过啥/变更历史"时输出 changes[] 履历
+    if is_history_query:
+        hist_lines = []
+        for o, hits in candidates:
+            tag = "、".join(sorted(hits))
+            head = f"[命中：{tag}] {o['customer']}的{o['product']}（{o['order_id']}）"
+            changes = o.get("changes") or []
+            if not changes:
+                hist_lines.append(head + "\n   ↳ 本单无变更记录（首次建单后未修改）")
+            else:
+                hist_lines.append(head + f"\n   ↳ 共 {len(changes)} 次变更记录（按时间倒序）：")
+                # 时间倒序输出（changes[] 是按发生顺序追加的，最新在后，倒序展示）
+                for idx, c in enumerate(reversed(changes), 1):
+                    hist_lines.append(_format_change(idx, c))
+        return "📜 变更履历追溯：\n" + "\n".join(hist_lines)
+
     lines = []
-    for o in res:
-        sug = ""
-        days = _days_to(o.get("delivery_date"))
-        if days is not None:
-            if 0 <= days <= 3:
-                sug = f"距交期还有 {days} 天，建议跟进一次。"
-            elif days < 0:
-                sug = "已逾期，请尽快处理。"
-        lines.append(query_text(o, sug))
-    return "\n".join(lines)
+    for o, hits in candidates:
+        tag = "、".join(sorted(hits))
+        sug = _suggest(o)
+        line = f"[命中：{tag}] " + _highlight_query_text(o, sug)
+        lines.append(line)
+    return prefix + "\n".join(lines)
+
+
+def _suggest(o: dict) -> str:
+    """根据交期生成主动建议（从 query() 抽出复用）。"""
+    days = _days_to(o.get("delivery_date"))
+    if days is None:
+        return ""
+    if 0 <= days <= 3:
+        return f"距交期还有 {days} 天，建议跟进一次。"
+    if days < 0:
+        return "已逾期，请尽快处理。"
+    return ""
+
+
+def _highlight_query_text(order: dict, suggestion: str = "") -> str:
+    """模块四·2：在原 query_text 基础上给关键字段（状态/数量/交期）加 emoji 高亮，
+    并在有变更履历时附加"本单有 N 次变更记录"提示。
+    不改 prompts.py（队友A 文件），只在 agent.py 里包装增强。"""
+    # 先拿原 query_text 的输出作为基础
+    base = query_text(order, suggestion)
+    # 关键字段高亮：在原文本里给状态值/数量/交期加 emoji 包围
+    status = order.get("status", "")
+    if status:
+        # 把"当前状态XXX"替换为带高亮的版本
+        status_emoji = _status_emoji(status)
+        base = base.replace(f"当前状态{status}", f"当前状态{status_emoji} {status}")
+    qty = order.get("qty")
+    if qty is not None and f"×{qty}" in base:
+        base = base.replace(f"×{qty}", f"📦 ×{qty}")
+    dd = order.get("delivery_date")
+    if dd and f"预计{dd}交付" in base:
+        base = base.replace(f"预计{dd}交付", f"📅 预计{dd}交付")
+    # 变更履历提示：有 changes[] 时告诉用户这是最新版，并标变更次数
+    changes = order.get("changes") or []
+    if changes:
+        hint = '问"改过啥"可看详情'
+        base += f"\n   ↳ 📌 本单已有 {len(changes)} 次变更记录（最新状态，{hint}）"
+    return base
+
+
+def _status_emoji(status: str) -> str:
+    """状态对应的 emoji 高亮标记。"""
+    return {
+        "沟通中": "💬",
+        "已报价": "💰",
+        "已确认": "✅",
+        "生产中": "🏭",
+        "已交付": "🚚",
+    }.get(status, "🔹")
+
+
+def _format_change(idx: int, c: dict) -> str:
+    """格式化单条变更履历为可读文本。
+    changes[] 每项结构：{time, field, old, new, source}
+    field 可能是逗号拼接的多字段，old/new 用 ' | ' 拼。
+    """
+    time_str = (c.get("time") or "")[:16].replace("T", " ")  # 截到分钟
+    fields = (c.get("field") or "").split(",")
+    olds = (c.get("old") or "").split(" | ")
+    news = (c.get("new") or "").split(" | ")
+    # 字段对齐：若 field/old/new 数量一致，逐字段展示；否则按原样整体展示
+    if len(fields) == len(olds) == len(news) and len(fields) > 1:
+        parts = [f"{f}: {o} → {n}" for f, o, n in zip(fields, olds, news)]
+        change_str = "；".join(parts)
+    else:
+        change_str = f"{c.get('field','?')}: {c.get('old','?')} → {c.get('new','?')}"
+    src = c.get("source", "")
+    src_str = f"  📎 原文：\"{src}\"" if src else ""
+    return f"   {idx}. [{time_str}] {change_str}{src_str}"
+
+
+def _parse_date_range(q: str):
+    """解析查询中的时间区间关键词 → (start_iso, end_iso)，无识别返回 None。
+    支持：今天 / 昨天 / 本周 / 上周 / 最近N天 / 近N天 / N天内
+    """
+    import re as _re
+    today = datetime.date.today()
+    # 今天
+    if "今天" in q or "今日" in q:
+        s = today.isoformat()
+        return (s, s)
+    # 昨天
+    if "昨天" in q:
+        y = (today - datetime.timedelta(days=1)).isoformat()
+        return (y, y)
+    # 本周（周一到今天）
+    if "本周" in q or "这周" in q:
+        monday = today - datetime.timedelta(days=today.weekday())
+        return (monday.isoformat(), today.isoformat())
+    # 上周（上周一到上周日）
+    if "上周" in q:
+        monday = today - datetime.timedelta(days=today.weekday() + 7)
+        sunday = monday + datetime.timedelta(days=6)
+        return (monday.isoformat(), sunday.isoformat())
+    # 最近N天 / 近N天 / N天内 / N天前
+    m = _re.search(r"(?:最近|近|前)\s*(\d+)\s*天", q) or _re.search(r"(\d+)\s*天(?:内|前)", q)
+    if m:
+        n = int(m.group(1))
+        start = (today - datetime.timedelta(days=n)).isoformat()
+        return (start, today.isoformat())
+    return None
 
 
 def briefing(store: Store, llm: LLM = None):
@@ -116,10 +307,22 @@ def briefing(store: Store, llm: LLM = None):
     overdue_tasks = store.query_tasks(overdue_before=today)
 
     def _urgent(o):
-        d = _days_to(o.get("delivery_date"))
-        return d if d is not None else 999
+        # 无交期返回 None，不再返回 999（修复"已拖 999 天"bug）
+        return _days_to(o.get("delivery_date"))
 
-    most_urgent = (f"{pending[0]['customer']} 已拖 {abs(_urgent(pending[0]))} 天" if pending else "无")
+    if pending:
+        # 优先选有交期且 days 最小（含负数=已逾期）的单做"最急"
+        with_due = [o for o in pending if _urgent(o) is not None]
+        if with_due:
+            most_urgent_order = min(with_due, key=_urgent)
+            days = _urgent(most_urgent_order)
+            tag = "已逾期" if days < 0 else f"还有 {days} 天"
+            most_urgent = f"{most_urgent_order['customer']} {tag}（交期 {most_urgent_order['delivery_date']}）"
+        else:
+            # 待报价但都没写交期
+            most_urgent = f"{pending[0]['customer']} 待定交期"
+    else:
+        most_urgent = "无"
     stats = {
         "date": today,
         "new": len(new_orders),
@@ -134,21 +337,64 @@ def briefing(store: Store, llm: LLM = None):
     return briefing_text(stats)
 
 
+# ---- 模块四·3：口语化应答 ----
+_COLLOQUIAL_SYSTEM = (
+    "你是「瓯单通」订单协同助手，负责把机器生成的查询/简报结果改写成人话口语播报。"
+    "严格规则（违反即失败）："
+    "1) 只能改写语气和表达方式，让它更像人说话（口语、自然、带一点温度，像同事在群里汇报）。"
+    "2) 不得添加、修改、删除任何事实信息——客户名、产品名、规格、数量、日期、状态、订单号必须原样保留。"
+    "3) 保留所有 📎 依据引用、emoji 标记和 [命中：xxx] 标签，不要去掉。"
+    "4) 保持简洁，不超过原文长度的 1.3 倍。不要加客套话、不要加开场白、不要加'根据查询结果'之类的废话。"
+    "5) 如果原文有多条订单，逐条改写，保持原有顺序和换行结构。"
+    "6) 直接输出改写后的文本，不要加任何解释或前缀。"
+)
+
+
+def _colloquialize(raw_text: str, llm: LLM = None) -> str:
+    """模块四·3：把机器化的查询/简报输出改写成口语播报体。
+
+    - llm 为 None 或无 key 时，返回原文本（保底，不影响现有功能）
+    - LLM 调用失败时，返回原文本（绝不让 LLM 故障拖垮查询）
+    - 防幻觉：system prompt 强约束"只能改写语气，不得添加/修改/删除事实"
+    """
+    if llm is None:
+        return raw_text
+    if not raw_text or not raw_text.strip():
+        return raw_text
+    try:
+        result = llm.chat(_COLLOQUIAL_SYSTEM, raw_text).strip()
+        # 安全兜底：LLM 返回空或过短（可能出错），回退原文
+        if not result or len(result) < len(raw_text) * 0.3:
+            return raw_text
+        return result
+    except Exception:
+        return raw_text
+
+
 # ---- 意图路由：自动判断用户这句话要干啥 ----
 _QUERY_MARKERS = ("到哪", "状态", "查", "进度", "什么时候交", "几号交",
-                 "待报价", "临期", "逾期", "交付", "什么状态", "有几")
+                 "待报价", "临期", "逾期", "交付", "什么状态", "有几",
+                 # 模块四·1 增强：补状态/产品/规格/时间类查询意图词，避免被误判为群聊去解析
+                 "生产中", "沟通中", "已报价", "已确认", "已发货", "在做", "做货", "排产",
+                 "的单", "那单", "有哪些", "什么时候", "几号", "本周", "上周", "最近",
+                 "今天", "昨天", "近几天", "天内",
+                 # 模块四·4 增强：历史追溯关键词
+                 "改过", "历史", "变更", "履历", "几次", "改了什么", "改了啥",
+                 "变更记录", "变更历史", "改动", "修改记录")
 _BRIEFING_MARKERS = ("简报", "今天情况", "今日", "整体情况", "汇总", "今天有哪些")
 
 
 def handle_message(text, store: Store, llm: LLM = None, mock=None):
-    """统一入口：贴群聊→提取；问句→查单；简报词→汇总。"""
+    """统一入口：贴群聊→提取；问句→查单；简报词→汇总。
+    模块四·3：query/briefing 的输出经 _colloquialize() 口语化（有 LLM 时生效，无则保底原文）。
+    """
     t = (text or "").strip()
     if not t:
         return {"mode": "hint",
                 "reply": "把业务群聊粘贴给我，或问我「XX 那单到哪了」「出今日简报」。"}
     if any(k in t for k in _BRIEFING_MARKERS):
-        return {"mode": "briefing", "reply": briefing(store, llm)}
+        return {"mode": "briefing", "reply": _colloquialize(briefing(store, llm), llm)}
     if any(k in t for k in _QUERY_MARKERS):
-        return {"mode": "query", "reply": query(t, store, llm)}
+        return {"mode": "query", "reply": _colloquialize(query(t, store, llm), llm)}
     card, _ = parse_chat(t, store, llm=llm, mock=mock)
     return {"mode": "parse", "reply": card}

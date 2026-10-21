@@ -1,9 +1,76 @@
-"""本地 JSON 存储，对应订单 / 任务两张台账。"""
+"""本地 JSON 存储，对应订单 / 任务两张台账。模块三·状态维护（队友D）。
+
+对应《开发任务清单》模块三 1~5：
+- 三·1 台账存储模型：orders.json / tasks.json，最新状态 + change_log 历史变更（契约 3）
+- 三·2 最新状态解析：apply_latest 后值覆盖前值；带冲突/异常锁的字段不自动覆盖，
+      只能经 confirm_update 人工确认后写入；状态流转受状态机约束
+- 三·3 持久化与读写：原子写盘、损坏文件自动备份兜底、get/update/query 增改查
+- 三·4 一致性校验与修复：integrity_check + repair（重复ID/缺失字段/非法状态/孤儿引用）
+- 三·5 进度状态机：基于 contracts.STATUS_ORDER（沟通中→已报价→已确认→生产中→已交付）
+      单向流转，禁止状态回退（force 需人工显式调用）
+
+铁律：契约字段以 contracts.py 为准，本文件只加实现、不改契约；既有方法签名
+（add_order / update_order / find_active / query_* 等）保持向下兼容，模块二/四/五
+无需改动即可继续使用。
+"""
 import json
 import os
 import datetime
+import copy
 
 from config import DATA_DIR
+from contracts import STATUS_ORDER, STATUS_RANK
+
+# 任务清单口径（待确认→生产中→已发货→已完成）与契约口径（沟通中→…→已交付）的别名映射。
+# 契约 STATUS_ORDER 是单一真相源，别名仅做归一化，不新增状态。
+STATUS_ALIASES = {
+    "待确认": "已确认",
+    "已发货": "已交付",
+    "已完成": "已交付",
+}
+
+# 冲突/异常人工确认前，禁止自动覆盖的字段（模块三·2）
+LOCKABLE_FIELDS = ("qty", "unit_price", "delivery_date", "status")
+
+
+def normalize_status(s):
+    """状态归一化：契约合法值原样返回；别名映射到契约值；未知值返回 None（交由 integrity_check 标记）。"""
+    s = (s or "").strip()
+    if not s:
+        return None
+    if s in STATUS_RANK:
+        return s
+    return STATUS_ALIASES.get(s)
+
+
+PLACEHOLDER_STATUS = "待补充"  # 模块二缺失分支登记的占位单状态（非契约流程状态）
+
+
+def can_transition(old_status, new_status):
+    """状态机判定：仅允许沿 STATUS_ORDER 向前流转（同值视为无操作，返回 True）。
+
+    占位单「待补充」是缺失信息时的临时态，补全后可进入任意合法状态。
+    """
+    o, n = normalize_status(old_status), normalize_status(new_status)
+    if n is None:
+        return False
+    if (old_status or "").strip() == PLACEHOLDER_STATUS:
+        return True
+    if o is None:
+        return False
+    return STATUS_RANK[n] >= STATUS_RANK[o]
+
+
+def next_statuses(status):
+    """给定状态的合法后续状态列表（不含自身）。"""
+    cur = normalize_status(status)
+    if cur is None:
+        return list(STATUS_ORDER)
+    return STATUS_ORDER[STATUS_RANK[cur] + 1:]
+
+
+def _now():
+    return datetime.datetime.now().isoformat(timespec="seconds")
 
 
 class Store:
@@ -12,75 +79,473 @@ class Store:
         os.makedirs(data_dir, exist_ok=True)
         self.orders_file = os.path.join(data_dir, "orders.json")
         self.tasks_file = os.path.join(data_dir, "tasks.json")
+        # 模块三·3：损坏文件兜底记录（load 时备份并重建，供运维查看）
+        self.load_warnings = []
         self.orders = self._load(self.orders_file)
         self.tasks = self._load(self.tasks_file)
+        self._normalize_all()
 
+    # ------------------------------------------------------------------
+    # 模块三·3 持久化：容错加载 + 原子写盘
+    # ------------------------------------------------------------------
     def _load(self, path):
-        if os.path.exists(path):
+        if not os.path.exists(path):
+            return []
+        try:
             with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        return []
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+            # 损坏文件不静默丢弃：备份留证后重建空台账
+            backup = f"{path}.corrupt-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+            try:
+                os.replace(path, backup)
+                self.load_warnings.append(f"{os.path.basename(path)} 已损坏，已备份至 {backup}：{e}")
+            except OSError:
+                self.load_warnings.append(f"{os.path.basename(path)} 已损坏且备份失败：{e}")
+            return []
+
+    def _save_one(self, path, data):
+        """原子写盘：先写临时文件再 os.replace，避免写一半断电/并发导致台账损坏。"""
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
 
     def save(self):
-        with open(self.orders_file, "w", encoding="utf-8") as f:
-            json.dump(self.orders, f, ensure_ascii=False, indent=2)
-        with open(self.tasks_file, "w", encoding="utf-8") as f:
-            json.dump(self.tasks, f, ensure_ascii=False, indent=2)
+        self._save_one(self.orders_file, self.orders)
+        self._save_one(self.tasks_file, self.tasks)
 
     def reset(self):
         self.orders, self.tasks = [], []
         self.save()
 
+    # ------------------------------------------------------------------
+    # 模块三·1 台账存储模型：记录归一化（最新状态 + 历史变更）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _ensure_history(rec):
+        """change_log（契约 3）与 changes（既有运行时字段）互为镜像，指向同一列表。"""
+        hist = rec.get("change_log") or rec.get("changes") or []
+        rec["change_log"] = hist
+        rec["changes"] = hist  # 同一列表对象，两键始终一致
+        return rec
+
+    @classmethod
+    def _norm_order(cls, o):
+        o.setdefault("order_id", "")
+        o.setdefault("customer", "")
+        o.setdefault("product", "")
+        o.setdefault("spec", "")
+        o.setdefault("qty", None)
+        o.setdefault("unit_price", "待报价")
+        o.setdefault("delivery_date", None)
+        raw_status = o.get("status")
+        st = normalize_status(raw_status)
+        if raw_status == PLACEHOLDER_STATUS:
+            o["status"] = PLACEHOLDER_STATUS  # 占位单保留，待补全后走状态机
+        elif st is None:
+            o["status"] = "沟通中"
+            if raw_status:
+                o.setdefault("flags", {}).setdefault("invalid_status", raw_status)
+        else:
+            o["status"] = st
+        o.setdefault("sample_flag", "无")
+        o.setdefault("source_excerpt", "")
+        o.setdefault("created_at", o.get("updated_at") or _now())
+        o.setdefault("updated_at", _now())
+        o.setdefault("flags", {})
+        cls._ensure_history(o)
+        return o
+
+    @classmethod
+    def _norm_task(cls, t):
+        t.setdefault("task_id", "")
+        t.setdefault("content", "")
+        t.setdefault("owner", "")
+        t.setdefault("deadline", None)
+        t.setdefault("status", "待办")
+        t.setdefault("order_id", None)
+        t.setdefault("created_at", t.get("updated_at") or _now())
+        t.setdefault("updated_at", _now())
+        cls._ensure_history(t)
+        return t
+
+    def _normalize_all(self):
+        for o in self.orders:
+            self._norm_order(o)
+        for t in self.tasks:
+            self._norm_task(t)
+
+    # ------------------------------------------------------------------
+    # 编号 / 查找（向下兼容）
+    # ------------------------------------------------------------------
     def next_order_id(self, date: str = None):
         date = date or datetime.date.today().strftime("%Y%m%d")
-        n = sum(1 for o in self.orders if date in o["order_id"]) + 1
+        n = sum(1 for o in self.orders if date in o.get("order_id", "")) + 1
         return f"ORD-{date}-{n:02d}"
 
     def next_task_id(self, date: str = None):
         date = date or datetime.date.today().strftime("%Y%m%d")
-        n = sum(1 for t in self.tasks if date in t["task_id"]) + 1
+        n = sum(1 for t in self.tasks if date in t.get("task_id", "")) + 1
         return f"TSK-{date}-{n:02d}"
+
+    def get_order(self, order_id: str):
+        """按单号精确取单（模块三·3 查）。"""
+        return next((o for o in self.orders if o.get("order_id") == order_id), None)
+
+    def get_task(self, task_id: str):
+        return next((t for t in self.tasks if t.get("task_id") == task_id), None)
 
     def find_active(self, customer: str, product: str):
         for o in self.orders:
-            if o["customer"] == customer and o["product"] == product and o["status"] != "已交付":
+            if o.get("customer") == customer and o.get("product") == product \
+                    and o.get("status") not in ("已交付",):
                 return o
         return None
 
+    # ------------------------------------------------------------------
+    # 模块三·2 最新状态解析（后值覆盖前值；冲突/异常不自动覆盖）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _meaningful(v):
+        s = str(v).strip() if v is not None else ""
+        return s not in ("", "None", "待报价")
+
+    def apply_latest(self, order_id: str, patch: dict, source: str = "",
+                     speaker: str = "", time: str = None, force: bool = False,
+                     record_each: bool = True):
+        """后值覆盖前值：仅覆盖本次有值字段（None/空串不覆盖）。
+
+        保护规则（模块三·2）：
+        1. flags.locked_fields 中的字段（冲突/异常待人工确认）不自动覆盖，
+           除非 force=True（人工确认路径 confirm_update）；
+        2. 状态回退（沿 STATUS_ORDER 向后）一律拒绝，除非 force=True；
+        3. 每个被覆盖字段写入 change_log 留痕（record_each=False 时由调用方
+           自行写入聚合变更，避免双份留痕）。
+
+        返回 {"updated": [字段...], "blocked": {字段: 原因}, "order": 记录|None}。
+        """
+        rec = self.get_order(order_id)
+        if rec is None:
+            return {"updated": [], "blocked": {}, "order": None}
+        time = time or _now()
+        locked = set(rec.get("flags", {}).get("locked_fields") or [])
+        updated, blocked, changes = [], {}, []
+        for f, new in (patch or {}).items():
+            if new is None or str(new).strip() == "":
+                continue  # 后值覆盖前值：无值不覆盖
+            old = rec.get(f)
+            if str(new) == str(old):
+                continue
+            if f == "status":
+                new_st = normalize_status(new)
+                if new_st is None:
+                    blocked[f] = f"非法状态值「{new}」"
+                    continue
+                if not can_transition(old, new_st) and not force:
+                    blocked[f] = f"状态不允许从「{old}」回退到「{new_st}」"
+                    continue
+                new = new_st
+            elif f in locked and not force:
+                blocked[f] = "该字段存在冲突/异常待人工确认，已锁定"
+                continue
+            changes.append({"field": f, "old": old, "new": new})
+            updated.append(f)
+        for c in changes:
+            rec[c["field"]] = c["new"]
+            if record_each:
+                self._ensure_history(rec)["change_log"].append({
+                    "time": time,
+                    "speaker": speaker,
+                    "field": c["field"],
+                    "old": c["old"],
+                    "new": c["new"],
+                    "raw": source,
+                })
+        if updated:
+            rec["updated_at"] = time
+        self.save()
+        return {"updated": updated, "blocked": blocked, "order": rec}
+
+    def update_order(self, order_id: str, patch: dict, change: dict = None,
+                     force: bool = False):
+        """向下兼容入口：模块二 agent 调用的 update_order 语义不变。
+
+        change 为模块二 apply_change 产出的留痕 dict（time/field/old/new/source），
+        原样追加进 change_log（此时 apply_latest 不再逐字段留痕，避免双份）；
+        patch 走 apply_latest 的后值覆盖 + 保护规则。
+        """
+        res = self.apply_latest(order_id, patch or {}, force=force,
+                                record_each=(change is None))
+        rec = res["order"]
+        if rec is not None and change:
+            hist = self._ensure_history(rec)["change_log"]
+            entry = dict(change)
+            hist.append(entry)
+            rec["updated_at"] = entry.get("time") or _now()
+            self.save()
+        return rec
+
+    def confirm_update(self, order_id: str, patch: dict, confirmed_by: str = "",
+                       note: str = "", time: str = None):
+        """人工确认后的强制覆盖（冲突/异常字段的唯一合法写入入口）。
+
+        覆盖指定字段、清除对应字段锁与 conflict/abnormal 标记，并留痕来源=人工确认。
+        """
+        rec = self.get_order(order_id)
+        if rec is None:
+            return {"updated": [], "blocked": {}, "order": None}
+        locked = set(rec.get("flags", {}).get("locked_fields") or [])
+        flags = rec.get("flags", {})
+        res = self.apply_latest(order_id, patch or {}, source=f"人工确认({confirmed_by}){('：' + note) if note else ''}",
+                                speaker=confirmed_by, time=time, force=True)
+        for f in res["updated"]:
+            locked.discard(f)
+        if locked:
+            flags["locked_fields"] = sorted(locked)
+        else:
+            flags.pop("locked_fields", None)
+        if not any(k in flags for k in ("conflict", "abnormal")):
+            flags.pop("conflict", None)
+            flags.pop("abnormal", None)
+        if rec.get("flags") is not flags:
+            rec["flags"] = flags
+        self.save()
+        return res
+
+    def lock_fields(self, order_id: str, fields, reason: str = ""):
+        """冲突/异常发生时锁定字段（配合模块二的 conflict/abnormal 判定使用）。"""
+        rec = self.get_order(order_id)
+        if rec is None:
+            return None
+        flags = rec.setdefault("flags", {})
+        cur = set(flags.get("locked_fields") or [])
+        cur |= {f for f in fields if f in LOCKABLE_FIELDS}
+        flags["locked_fields"] = sorted(cur)
+        if reason:
+            flags["lock_reason"] = reason
+        self.save()
+        return rec
+
+    def set_order_status(self, order_id: str, new_status: str, speaker: str = "",
+                         raw: str = "", time: str = None, force: bool = False):
+        """模块三·5 状态机推进入口：非法流转拒绝并说明原因。"""
+        new_st = normalize_status(new_status)
+        if new_st is None:
+            return {"ok": False, "reason": f"非法状态值「{new_status}」", "order": None}
+        res = self.apply_latest(order_id, {"status": new_st}, source=raw,
+                                speaker=speaker, time=time, force=force)
+        if res["order"] is None:
+            return {"ok": False, "reason": "订单不存在", "order": None}
+        if "status" in res["blocked"]:
+            return {"ok": False, "reason": res["blocked"]["status"], "order": res["order"]}
+        return {"ok": True, "reason": "", "order": res["order"]}
+
+    # ------------------------------------------------------------------
+    # 增改查（向下兼容 + 补全任务侧 CRUD）
+    # ------------------------------------------------------------------
     def add_order(self, order: dict):
+        self._norm_order(order)
         self.orders.append(order)
         self.save()
-
-    def update_order(self, order_id: str, patch: dict, change: dict = None):
-        for o in self.orders:
-            if o["order_id"] == order_id:
-                o.update({k: v for k, v in patch.items() if v is not None})
-                if change:
-                    o.setdefault("changes", []).append(change)
-                o["updated_at"] = datetime.datetime.now().isoformat(timespec="seconds")
-                self.save()
-                return o
-        return None
+        return order
 
     def add_task(self, task: dict):
+        self._norm_task(task)
         self.tasks.append(task)
         self.save()
         return task
 
-    def query_orders(self, customer=None, status=None, due_before=None, created_on=None):
+    def update_task(self, task_id: str, patch: dict, speaker: str = "",
+                    time: str = None):
+        """任务增改查补全：状态限 待办/进行中/已完成。"""
+        t = self.get_task(task_id)
+        if t is None:
+            return None
+        time = time or _now()
+        for k, v in (patch or {}).items():
+            if v is None:
+                continue
+            if k == "status" and v not in ("待办", "进行中", "已完成"):
+                continue
+            if str(v) == str(t.get(k)):
+                continue
+            self._ensure_history(t)["change_log"].append(
+                {"time": time, "speaker": speaker, "field": k,
+                 "old": t.get(k), "new": v, "raw": ""})
+            t[k] = v
+        t["updated_at"] = time
+        self.save()
+        return t
+
+    def query_orders(self, customer=None, status=None, due_before=None, created_on=None,
+                     order_id=None):
         res = self.orders
+        if order_id:
+            res = [o for o in res if o.get("order_id") == order_id]
         if customer:
-            res = [o for o in res if customer in o["customer"]]
+            res = [o for o in res if customer in o.get("customer", "")]
         if status:
-            res = [o for o in res if o["status"] == status]
+            res = [o for o in res if o.get("status") == status]
         if due_before:
-            res = [o for o in res if o.get("delivery_date") and o["delivery_date"] <= due_before and o["status"] != "已交付"]
+            res = [o for o in res if o.get("delivery_date")
+                   and o["delivery_date"] <= due_before and o.get("status") != "已交付"]
         if created_on:
             res = [o for o in res if o.get("created_at", "").startswith(created_on)]
         return res
 
-    def query_tasks(self, status: str = "待办", overdue_before=None):
-        res = [t for t in self.tasks if t["status"] == status]
+    def query_tasks(self, status: str = "待办", overdue_before=None, all_status: bool = False):
+        res = self.tasks if all_status else [t for t in self.tasks if t.get("status") == status]
         if overdue_before:
             res = [t for t in res if t.get("deadline") and t["deadline"] < overdue_before]
         return res
+
+    # ------------------------------------------------------------------
+    # 模块三·4 一致性校验与修复
+    # ------------------------------------------------------------------
+    def integrity_check(self):
+        """扫描台账一致性问题，返回问题清单（不改动数据）。
+
+        检查项：重复ID、必填字段缺失、状态非法、数量非法（负数/非整数）、
+        交期格式、任务孤儿引用、变更记录缺时间。
+        """
+        issues = []
+
+        def _issue(level, entity, eid, msg):
+            issues.append({"level": level, "entity": entity, "id": eid, "issue": msg})
+
+        seen_o, seen_t = {}, {}
+        for o in self.orders:
+            oid = o.get("order_id") or "(无单号)"
+            if oid in seen_o:
+                _issue("error", "order", oid, f"与 {seen_o[oid]} 单号重复")
+            else:
+                seen_o[oid] = oid
+            if not o.get("customer") or not o.get("product"):
+                _issue("error", "order", oid, "缺客户或产品（主键字段）")
+            st = normalize_status(o.get("status"))
+            if st is None and o.get("status") != "待补充":
+                _issue("error", "order", oid, f"非法状态「{o.get('status')}」")
+            q = o.get("qty")
+            if q is not None:
+                qi = q if isinstance(q, int) and not isinstance(q, bool) else None
+                if qi is None:
+                    _issue("error", "order", oid, f"数量「{q}」非整数")
+                elif qi < 0:
+                    _issue("error", "order", oid, f"数量 {qi} 为负数")
+            dd = o.get("delivery_date")
+            if dd and not (isinstance(dd, str) and len(dd) == 10 and dd[4] == dd[7] == "-"):
+                _issue("error", "order", oid, f"交期「{dd}」非 YYYY-MM-DD 格式")
+            if not o.get("created_at"):
+                _issue("warn", "order", oid, "缺 created_at")
+            for c in o.get("change_log", []):
+                if not c.get("time"):
+                    _issue("warn", "order", oid, "存在缺 time 的变更记录")
+                    break
+
+        order_ids = {o.get("order_id") for o in self.orders}
+        for t in self.tasks:
+            tid = t.get("task_id") or "(无任务号)"
+            if tid in seen_t:
+                _issue("error", "task", tid, f"与 {seen_t[tid]} 任务号重复")
+            else:
+                seen_t[tid] = tid
+            if not t.get("content"):
+                _issue("error", "task", tid, "缺任务内容")
+            ref = t.get("order_id")
+            if ref and ref not in order_ids:
+                _issue("warn", "task", tid, f"关联订单 {ref} 不存在（孤儿引用）")
+        return issues
+
+    def repair(self, apply: bool = True):
+        """修复可自动修复的问题，返回 (修复动作列表, 仍需人工处理的问题清单)。
+
+        自动修复：重复ID重新编号、非法状态归一化（别名映射，仍非法→沟通中并标记）、
+        缺 created_at/updated_at 补当前时间、任务孤儿引用清除、变更记录补时间。
+        不自动改值：负数/非整数数量、非法交期 → 标记 flags 待人工确认（不覆盖原值）。
+        """
+        actions, remaining = [], []
+
+        def _act(msg):
+            actions.append(msg)
+
+        # 订单：重复单号
+        seen = set()
+        for o in self.orders:
+            oid = o.get("order_id")
+            if not oid or oid in seen:
+                new_id = self.next_order_id()
+                _act(f"订单「{oid or '(空)'}」单号重复/缺失，重新编号为 {new_id}")
+                o["order_id"] = new_id
+            seen.add(o["order_id"])
+        for o in self.orders:
+            oid = o["order_id"]
+            # 非法状态
+            st = normalize_status(o.get("status"))
+            if st is None:
+                if o.get("status") == "待补充":
+                    pass  # 占位单合法状态，保留
+                else:
+                    bad = o.get("status")
+                    o["status"] = "沟通中"
+                    o.setdefault("flags", {})["invalid_status"] = bad
+                    _act(f"订单 {oid} 非法状态「{bad}」归一化为「沟通中」并标记待核")
+            # 时间戳
+            if not o.get("created_at"):
+                o["created_at"] = _now()
+                _act(f"订单 {oid} 补 created_at")
+            if not o.get("updated_at"):
+                o["updated_at"] = o["created_at"]
+                _act(f"订单 {oid} 补 updated_at")
+            # 变更记录补时间
+            hist = self._ensure_history(o)["change_log"]
+            for c in hist:
+                if not c.get("time"):
+                    c["time"] = o["updated_at"]
+                    _act(f"订单 {oid} 变更记录补 time")
+            # 数量/交期异常：只标记不覆盖（模块三·2 原则）
+            flags = o.setdefault("flags", {})
+            q = o.get("qty")
+            if q is not None:
+                ok_int = isinstance(q, int) and not isinstance(q, bool) and q >= 0
+                if not ok_int:
+                    flags["abnormal"] = f"数量「{q}」异常，待人工确认"
+                    flags["locked_fields"] = sorted(
+                        set(flags.get("locked_fields") or []) | {"qty"})
+                    remaining.append(f"订单 {oid} 数量异常（{q}），已锁定待人工确认")
+            dd = o.get("delivery_date")
+            if dd and not (isinstance(dd, str) and len(dd) == 10 and dd[4] == dd[7] == "-"):
+                flags["abnormal"] = f"交期「{dd}」格式异常，待人工确认"
+                flags["locked_fields"] = sorted(
+                    set(flags.get("locked_fields") or []) | {"delivery_date"})
+                remaining.append(f"订单 {oid} 交期格式异常（{dd}），已锁定待人工确认")
+
+        # 任务：重复号 / 孤儿引用 / 时间戳
+        seen_t = set()
+        order_ids = {o["order_id"] for o in self.orders}
+        for t in self.tasks:
+            tid = t.get("task_id")
+            if not tid or tid in seen_t:
+                new_id = self.next_task_id()
+                _act(f"任务「{tid or '(空)'}」任务号重复/缺失，重新编号为 {new_id}")
+                t["task_id"] = new_id
+            seen_t.add(t["task_id"])
+            if not t.get("created_at"):
+                t["created_at"] = _now()
+                _act(f"任务 {t['task_id']} 补 created_at")
+            if not t.get("updated_at"):
+                t["updated_at"] = t["created_at"]
+                _act(f"任务 {t['task_id']} 补 updated_at")
+            if t.get("order_id") and t["order_id"] not in order_ids:
+                _act(f"任务 {t['task_id']} 孤儿引用 {t['order_id']} 已清除")
+                t["order_id"] = None
+            self._norm_task(t)
+
+        if apply and actions:
+            self.save()
+        return actions, remaining
+
+    def snapshot(self):
+        """深拷贝当前台账（给查询/展示层，防止外部误改内存数据）。"""
+        return {"orders": copy.deepcopy(self.orders), "tasks": copy.deepcopy(self.tasks)}

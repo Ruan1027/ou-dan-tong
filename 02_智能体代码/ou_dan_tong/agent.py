@@ -49,7 +49,10 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
                     existing["flags"].pop("conflict", None)
                     existing["flags"].pop("missing", None)
                     store.update_order(existing["order_id"], {}, None)
-            out.append(("update", existing))
+                out.append(("update", existing))
+            else:
+                # BUG-07 修复：内容完全一致时不再输出"已更新订单"，标记为无变化
+                out.append(("nochange", existing))
         else:
             o["order_id"] = store.next_order_id(date)
             o["created_at"] = now
@@ -70,6 +73,9 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
         new_tasks.append(t)
     first_new = next((i for i, (k, _) in enumerate(out) if k == "new"), None)
     for i, (kind, rec) in enumerate(out):
+        if kind == "nochange":
+            cards.append(f"⏸️ 无变化：{rec['customer']}的{rec['product']} 数据已一致，未重复写入。")
+            continue
         show_tasks = new_tasks if i == first_new else []
         cards.append(card_text(rec, show_tasks, kind == "new"))
     if skipped:

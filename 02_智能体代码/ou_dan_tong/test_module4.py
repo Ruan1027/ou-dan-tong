@@ -17,10 +17,6 @@ def test_module4():
     store = Store()
     store.reset()
 
-
-    store = Store()
-    store.reset()
-
     # 场景1：应入库 2 单 + 1 任务
     _, info = parse_chat("dummy", store, mock=SCENARIO1_MOCK)
     assert len(info["orders"]) == 2, info["orders"]
@@ -273,6 +269,25 @@ def test_module4():
         assert not any(fn in colloquial for fn in _fake_names), f"口语化出现虚构客户名(幻觉): {colloquial}"
     else:
         print("  [跳过] LLM 口语化测试（未设置 DEEPSEEK_API_KEY）")
+
+    # ---- BUG-07 防回归：内容一致时不再误报"已更新订单" ----
+    # 场景35：完全相同订单二次导入 → 应显示"无变化"，不显示"已更新订单"
+    store.reset()
+    parse_chat("dummy", store, mock=SCENARIO1_MOCK)  # 首次导入
+    card2, info2 = parse_chat("dummy", store, mock=SCENARIO1_MOCK)  # 原样再导
+    assert all(k == "nochange" for k, _ in info2["orders"]), \
+        f"BUG-07: 相同订单应标记 nochange: {[k for k, _ in info2['orders']]}"
+    assert "已更新订单" not in card2, f"BUG-07: 不应出现已更新订单: {card2}"
+    assert "无变化" in card2, f"BUG-07: 应提示无变化: {card2}"
+    # 台账不应被重复写入（订单数不变）
+    assert len(store.orders) == 2, f"BUG-07: 台账应保持 2 单: {len(store.orders)}"
+
+    # 场景36：真实变更仍应显示"已更新订单"（防过度修复）
+    store.reset()
+    parse_chat("dummy", store, mock=SCENARIO1_MOCK)  # 首次
+    _, info3 = parse_chat("dummy", store, mock=SCENARIO3_MOCK)  # qty 5000→6000 真变更
+    assert any(k == "update" for k, _ in info3["orders"]), \
+        f"BUG-07 过度修复: 真实变更应标记 update: {[k for k, _ in info3['orders']]}"
 
     print("ALL TESTS PASSED ✅")
     print("-" * 40)

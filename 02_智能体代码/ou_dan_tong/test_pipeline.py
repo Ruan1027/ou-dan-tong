@@ -200,6 +200,55 @@ def test_pipeline():
     ans = query("电机壳那单到哪了", s5)
     ck.ok("500" in ans and "2026-11-08" in ans, "T11 查询应返回最新状态而非旧版", ans)
 
+    # ---------------- T12 新场景类型不破坏契约 ----------------
+    # 模块一 v1.1 新增「取消订单 / 部分交付 / 任务派发 / 价格报价」四类。
+    # 这些语义当前尚未落地（见 BUG-11/12），但**管线本身不能崩、不能污染台账**：
+    # 消息能进、记录不重复、主键不漂移。语义落地与否由 test_defects 探针把关。
+    ck.section("T12 新场景类型管线健壮性（取消/部分交付/报价）")
+    s6 = Store()
+    s6.reset()
+    parse_chat("x", s6, mock=[_order(customer="陈老板（瑞安汽配）", product="轴承6204",
+               qty=100, unit_price="6.0", delivery_date="2026-11-10",
+               status_hint="已确认", source_excerpt="轴承 100 个 11-10 交")], now=NOW)
+    parse_chat("x", s6, mock=[_order(customer="陈老板（瑞安汽配）", product="轴承6204",
+               qty=100, unit_price="6.0", delivery_date="2026-11-10",
+               status_hint="已取消", source_excerpt="那单先取消吧")], now=NOW)
+    ck.ok(len(s6.orders) == 1, "T12 取消订单不应新建记录（主键不漂移）", len(s6.orders))
+    ck.ok(s6.orders[0]["customer"] == "陈老板（瑞安汽配）", "T12 取消后客户主键不变",
+          s6.orders[0]["customer"])
+
+    parse_chat("x", s6, mock=[_order(customer="陈老板（瑞安汽配）", product="轴承6204",
+               qty=100, unit_price="6.0", delivery_date="2026-11-10",
+               status_hint="部分交付", source_excerpt="先发了 40 个")], now=NOW)
+    ck.ok(len(s6.orders) == 1, "T12 部分交付不应新建记录", len(s6.orders))
+
+    s7 = Store()
+    s7.reset()
+    parse_chat("x", s7, mock=[_order(customer="阿强", product="304不锈钢法兰盖",
+               qty=None, unit_price="待报价", delivery_date=None,
+               status_hint="沟通中", source_excerpt="先问下价，数量没定")], now=NOW)
+    parse_chat("x", s7, mock=[_order(customer="阿强", product="304不锈钢法兰盖",
+               qty=200, unit_price="9.8", delivery_date=None,
+               status_hint="已报价", source_excerpt="先 200 个，单价 9.8 锁死")], now=NOW)
+    ck.ok(len(s7.orders) == 1, "T12 报价闭环（询价→报价）只应有 1 单", len(s7.orders))
+    ck.ok(s7.orders[0]["qty"] == 200, "T12 报价后数量应落到 200", s7.orders[0].get("qty"))
+    ck.ok(str(s7.orders[0]["unit_price"]) == "9.8", "T12 报价后单价应落到 9.8",
+          s7.orders[0].get("unit_price"))
+
+    # ---------------- T13 纯任务派发不静默 ----------------
+    # BUG-12：orders 为空时 parse_chat 返回空卡片。此处只断言「任务确实入库」，
+    # 卡片可见性由 test_defects.BUG-12 探针把关，避免断言与缺陷状态耦合。
+    ck.section("T13 纯任务派发入库")
+    s8 = Store()
+    s8.reset()
+    _, meta8 = parse_chat("x", s8, mock=[
+        {"type": "task", "task_content": "跟进物流单号", "owner": "老周",
+         "task_deadline": "2026-10-22"}], now=NOW)
+    ck.ok(len(s8.tasks) == 1, "T13 任务应入库", len(s8.tasks))
+    ck.ok(s8.tasks[0]["task_id"].startswith("TSK-"), "T13 任务号格式应为 TSK-*",
+          s8.tasks[0].get("task_id"))
+    ck.ok(s8.tasks[0]["owner"] == "老周", "T13 任务应保留负责人", s8.tasks[0].get("owner"))
+
     ck.report()
     print("-" * 46)
     print(briefing(store))

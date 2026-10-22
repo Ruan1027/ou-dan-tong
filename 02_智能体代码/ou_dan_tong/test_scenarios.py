@@ -20,8 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from store import Store
 from agent import parse_chat
-from test_fixtures import (load_chat_logs, check_contract1, iter_scene_rounds,
-                           EXPECTED_TARGET, SCENE_ROUNDS, _norm_date, FIXED_NOW)
+from test_fixtures import (load_chat_logs, check_contract1, check_fixture_coverage,
+                           iter_scene_rounds, EXPECTED_TARGET, ROUND_EXPECT,
+                           SCENE_ROUNDS, _norm_date, FIXED_NOW)
 
 # 卡片前缀 → 判定（与 agent.parse_chat 的可见话术一一对应）
 VERDICT_BY_MARK = [("⛔", "abnormal"), ("⚠️", "conflict"),
@@ -29,12 +30,44 @@ VERDICT_BY_MARK = [("⛔", "abnormal"), ("⚠️", "conflict"),
 
 # 已知偏差白名单：(scene_id, round) -> (BUG-ID, 说明)
 # 这些项根因在他人模块，模块五只登记不复改，见 模块五_测试报告.md
+# 注意：2026-10-22 复查，队友已修复 BUG-01/02 的最小复现，
+# 但完整场景仍残留同类问题，故偏差保留并标注残留点。
 ALLOWED_DEVIATIONS = {
-    ("S3-G1", 0): ("BUG-01", "占位/补单场景下 status 参与冲突比对，"
-                             "台账「待补充/已确认」与来单默认「沟通中」互判冲突，掩盖了缺失追问"),
-    ("S2-G2", 0): ("BUG-02", "变更动词表缺「加到」，口语增量表达被判为冲突"),
-    ("S2-G2", 1): ("BUG-02", "同上，且上一轮未写入导致后续轮次持续冲突"),
-    ("S2-G2", 2): ("BUG-02", "同上，且上一轮未写入导致后续轮次持续冲突"),
+    # 「加到」类变更动词已修复；「算了还是 65」这类口语修正表达仍无变更
+    # 动词覆盖，数量 65 与台账 80 被判冲突。
+    ("S2-G2", 1): ("BUG-02", "上一轮写入成功后，本轮「算了还是 65」口语修正仍判冲突"
+                             "——「加到」类已修复，口语减量/修正表达残留"),
+    # 占位/补全的冲突问题已修复；但「已存在实体 + 全缺关键字段」的消息
+    # 仍被判为 ok 更新而非 missing 追问，缺失闭环残留。
+    ("S3-G1", 0): ("BUG-01", "已存在实体但来单缺数量/交期时被当作 ok 更新，无缺失追问"
+                             "——冲突掩盖缺失已修，缺失追问残留"),
+    # —— 2026-10-22 全集扩充（22 组）后新发现的缺口，均归责他模块 ——
+    # 数量 5000 与台账 65 的比对先命中冲突分支，异常规则（数量暴涨/多打零）
+    # 未参与判定，导致「明显异常」被降级成「冲突」。
+    ("S5-G3", 0): ("BUG-08", "数量异常偏大（5000 vs 台账 65）未被判 abnormal，"
+                             "冲突判定抢先；异常规则缺「数量暴涨 N 倍」检测"),
+    # 台账交期是单值字段，无法表达「11-01 出 500 / 11-03 出 400」的分批口径，
+    # 第 3 轮回填第一批交期 11-01 与台账 11-03 打架。
+    ("S6-E2", 2): ("BUG-09", "分批交期不支持：台账无「分批/多批次交期」字段，"
+                             "第 3 轮回填第一批交期被判冲突"),
+    # validator 的 DATE_RE 只认 ^\d{4}-\d{2}-\d{2}$，「2026-10-21 17:00」
+    # 这类带时刻的期限被置空 → 恒判期限缺失。
+    ("S7-T1", 0): ("BUG-10", "任务期限不支持时刻：DATE_RE 只认 YYYY-MM-DD，"
+                             "「今天 17:00 前」这类口语期限被置空，恒判期限缺失"),
+    # 状态机只有 5 态（沟通中/待补充/待确认/已确认/已报价等），无「已取消/部分交付」。
+    # 卡片判 ok 但状态字段不动，取消/部分交付语义被静默吞掉 —— 卡片判定看不出来，
+    # 只有比对台账状态才能发现，故由 EXPECT_STATUS 专项校验捕获。
+    ("S8-C1", 1): ("BUG-11", "取消订单：状态未转「已取消」"),
+    ("S8-P1", 0): ("BUG-11", "部分交付：状态未转「部分交付」，"
+                             "已交付 120 / 余量 180 无字段承载"),
+}
+
+# 语义落库校验：(scene_id, round) -> (期望状态, BUG-ID)
+# 卡片判定为 ok 只说明「没报错」，不代表语义真正落地。对新增场景类型
+# （部分交付/取消订单）额外校验状态字段，防止「静默吞掉语义」被判通过。
+EXPECT_STATUS = {
+    ("S8-C1", 1): ("已取消", "BUG-11"),
+    ("S8-P1", 0): ("部分交付", "BUG-11"),
 }
 
 
@@ -49,6 +82,10 @@ def run():
     groups = load_chat_logs()
     problems, by_type = check_contract1(groups)
 
+    # 覆盖度闸门：数据集扩充而夹具没跟上时直接判失败（2026-10-22 新增）
+    cov_problems, cov = check_fixture_coverage(groups)
+    problems = list(problems) + cov_problems
+
     print("=" * 78)
     print("模块五·2 场景走查 —— 数据源：03_演示数据/data/chat_logs.json")
     print("=" * 78)
@@ -61,6 +98,15 @@ def run():
     for t in sorted(by_type):
         print(f"   · {t}：{len(by_type[t])} 组 → {by_type[t]}")
 
+    print(f"\n[1b] 走查夹具覆盖度闸门（数据集 {cov['scenes_total']} 组）")
+    pct = (cov["scenes_covered"] / cov["scenes_total"] * 100) if cov["scenes_total"] else 0
+    flag = "✅" if not cov["missing"] else "❌"
+    print(f"   {flag} 场景覆盖 {cov['scenes_covered']}/{cov['scenes_total']} ({pct:.0f}%)"
+          f" ｜ 走查轮次 {cov['rounds_total']} 轮")
+    for t in sorted(cov["by_type"]):
+        e = cov["by_type"][t]
+        print(f"      · {t}：{e['covered']}/{e['total']} 组已配夹具")
+
     store = Store()
     store.reset()
     rows, failures, deviations = [], [], []
@@ -68,13 +114,14 @@ def run():
     print("\n[2] 逐场景走查（判定取自卡片可见话术）")
     for scene, rnd, mock in iter_scene_rounds(groups):
         sid = scene["scene_id"]
-        expect = EXPECTED_TARGET.get(sid, scene.get("expected", {}).get("validator_target"))
+        # 期望取值优先级：按轮覆盖 > 场景级（模块一 expected.validator_target）
+        expect = ROUND_EXPECT.get(
+            (sid, rnd),
+            EXPECTED_TARGET.get(sid, scene.get("expected", {}).get("validator_target")))
         before = len(store.orders)
         card, _ = parse_chat("walkthrough", store, mock=mock, now=FIXED_NOW)
         actual = verdict_of(card)
         key = (sid, rnd)
-        rows.append((sid, scene.get("scene_type"), rnd, expect, actual))
-
         ok = (actual == expect)
         extra = ""
         # expected.fields 描述的是「该场景走完后的最终态」，只在最后一轮校验
@@ -98,19 +145,39 @@ def run():
                     got = rec.get("delivery_date")
                     if want and want != got:
                         ok, extra = False, f"交期期望{want}实际{got}"
+        # 语义落库校验：卡片判 ok 但仍可能「静默吞掉语义」（如部分交付未转状态）
+        if ok and key in EXPECT_STATUS:
+            want_status, bug = EXPECT_STATUS[key]
+            cust = mock[0]["customer"]
+            prod = mock[0]["product"]
+            rec = next((o for o in store.orders
+                        if o["customer"] == cust and o["product"] == prod), None)
+            got = (rec or {}).get("status")
+            if got != want_status:
+                ok = False
+                extra = (f"{bug}：状态期望「{want_status}」实际「{got}」"
+                         f"（语义未落地）")
+
         if ok and expect == "abnormal":
             if len(store.orders) != before:
                 ok, extra = False, "异常不应写入，但台账条数增加"
 
+        rows.append((sid, scene.get("scene_type"), rnd, expect, actual, ok))
+
         if not ok:
             if key in ALLOWED_DEVIATIONS:
-                deviations.append((sid, rnd, expect, actual, ALLOWED_DEVIATIONS[key]))
+                bug, why = ALLOWED_DEVIATIONS[key]
+                if extra:  # 语义校验的实测细节一并带出，便于归属人定位
+                    why = f"{why}｜实测：{extra}"
+                deviations.append((sid, rnd, expect, actual, (bug, why)))
             else:
                 failures.append((sid, rnd, expect, actual, extra or card.splitlines()[0]))
 
-    for sid, stype, rnd, exp, act in rows:
-        mark = "✅" if act == exp else ("⚠️" if (sid, rnd) in ALLOWED_DEVIATIONS else "❌")
-        print(f"   {mark} {sid} ({stype}) 第{rnd+1}轮  期望={exp:<8} 实际={act}")
+    for sid, stype, rnd, exp, act, ok in rows:
+        # ok 为 False 时：已归责 → ⚠️；否则 → ❌
+        mark = "✅" if ok else ("⚠️" if (sid, rnd) in ALLOWED_DEVIATIONS else "❌")
+        note = "" if ok else "  ← 语义未落地" if (sid, rnd) in EXPECT_STATUS else ""
+        print(f"   {mark} {sid} ({stype}) 第{rnd+1}轮  期望={exp:<8} 实际={act}{note}")
 
     print("\n[3] 走查结论")
     total = len(rows)
@@ -127,11 +194,73 @@ def run():
         for sid, rnd, exp, act, why in failures:
             print(f"   ❌ {sid} 第{rnd+1}轮：期望 {exp} / 实际 {act} ｜ {why}")
 
+    audit_whitelist(rows)
+
     if problems or failures:
         raise AssertionError(
             f"场景走查未通过：数据问题 {len(problems)} 项、断言失败 {len(failures)} 项")
     print("\n✅ 模块五·2 场景走查完成（偏差项已归责登记）")
     return rows, deviations
+
+
+def audit_whitelist(rows):
+    """白名单自维护体检（2026-10-22 新增）。
+
+    ALLOWED_DEVIATIONS 是硬编码的「已知偏差」豁免表，随着队友修复推进它会过时。
+    过时的白名单会**掩盖真实回归**（本该失败的项被静默豁免），所以这里做三项体检：
+
+      1. 失效项：白名单里的 (场景, 轮次) 本轮已经通过 → 该偏差已消失，应移除豁免；
+      2. 孤儿归责：白名单引用的 BUG-ID 在缺陷看板里不存在（拼错或已下线）；
+      3. 探针已绿但场景仍偏差：说明「最小复现修好了、完整场景仍残留」，提示归属人复核。
+
+    本节只输出提示、不判失败 —— 白名单清理属于测试负责人的主动维护动作，
+    但若长期不清理会自动累积噪音，故在此显式点名。
+    """
+    try:
+        from test_defects import DEFECTS as _DEFECTS
+        known_ids = {d["id"] for d in _DEFECTS}
+        fixed_map = None
+    except Exception:      # 缺陷看板不可用时跳过第 2/3 项
+        known_ids, fixed_map = None, None
+
+    ok_keys = {(r[0], r[1]) for r in rows if r[5]}
+    stale = sorted(k for k in ALLOWED_DEVIATIONS if k in ok_keys)
+    orphan = []
+    probe_green = []
+    if known_ids is not None:
+        for k, (bug, _why) in ALLOWED_DEVIATIONS.items():
+            if bug not in known_ids:
+                orphan.append((k, bug))
+        # 只对仍偏差的项做「探针已绿」提示
+        if fixed_map is None:
+            try:
+                from test_defects import DEFECTS as D2
+                for k, (bug, _why) in ALLOWED_DEVIATIONS.items():
+                    if k in ok_keys or bug not in known_ids:
+                        continue
+                    d = next(x for x in D2 if x["id"] == bug)
+                    fixed, _ev = d["probe"]()
+                    if fixed:
+                        probe_green.append((k, bug))
+            except Exception:
+                pass
+
+    print("\n[4] 白名单自检（ALLOWED_DEVIATIONS 维护体检）")
+    if not (stale or orphan or probe_green):
+        print("   ✅ 无失效项、无孤儿归责、无「探针已绿但场景仍偏差」项")
+        return
+    if stale:
+        print(f"   🧹 {len(stale)} 项已失效（本轮已通过，建议移除豁免，避免掩盖回归）：")
+        for sid, rnd in stale:
+            print(f"      · {sid} 第{rnd+1}轮 → {ALLOWED_DEVIATIONS[(sid, rnd)][0]}")
+    if orphan:
+        print("   🔗 归责到不存在的缺陷 ID（请核对拼写或已下线）：")
+        for (sid, rnd), bug in orphan:
+            print(f"      · {sid} 第{rnd+1}轮 → {bug}")
+    if probe_green:
+        print("   🔍 探针已转绿但完整场景仍偏差（最小复现已修、场景残留，提示归属人复核）：")
+        for (sid, rnd), bug in probe_green:
+            print(f"      · {sid} 第{rnd+1}轮 → {bug}")
 
 
 if __name__ == "__main__":

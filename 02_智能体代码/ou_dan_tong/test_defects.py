@@ -128,6 +128,67 @@ def probe_bug07():
     return fixed, f"首行：{line}"
 
 
+def probe_bug08():
+    """数量异常偏大（5000 vs 台账 65，疑似多打零）未被判异常，被冲突判定抢先。"""
+    s = fresh()
+    parse_chat("x", s, mock=[_order(C_LW, "DZ47-63", 65, "26", "2026-10-24", "已确认",
+                                    excerpt="DZ47 65 个")], now=NOW)
+    card, _ = parse_chat("x", s, mock=[_order(C_LW, "DZ47-63", 5000, "26", "2026-10-24",
+                                              "已确认", excerpt="数量写成 5000 了吧")], now=NOW)
+    line = card.splitlines()[0] if card.strip() else "(空卡片)"
+    return ("⛔" in card), f"判为异常={'⛔' in card} ｜ {line[:70]}"
+
+
+def probe_bug09():
+    """分批交期无法表达：台账交期是单值字段，「11-01 出 500 / 11-03 出 400」丢失。"""
+    s = fresh()
+    parse_chat("x", s, mock=[_order(C_LW, "PU 皮鞋面", 500, "12", "2026-11-01", "已确认",
+                                    excerpt="PU 皮 500 米 11-01 到")], now=NOW)
+    parse_chat("x", s, mock=[_order(C_LW, "PU 皮鞋面", 900, "12", "2026-11-03", "已确认",
+                                    excerpt="加量改 900，得 11-03")], now=NOW)
+    card, _ = parse_chat("x", s, mock=[_order(C_LW, "PU 皮鞋面", 900, "12", "2026-11-01",
+                                              "已确认",
+                                              excerpt="分两批：11-01 出 500，11-03 出 400")],
+                         now=NOW)
+    r = _rec(s, C_LW)
+    has_batches = any(k in str(r or {}) for k in ("batches", "batch", "split"))
+    line = card.splitlines()[0] if card.strip() else "(空卡片)"
+    return has_batches, f"台账含分批字段={has_batches} ｜ 交期={r and r.get('delivery_date')} ｜ {line[:50]}"
+
+
+def probe_bug10():
+    """任务期限只认 YYYY-MM-DD，「今天 17:00 前」这类带时刻的口语期限被置空。"""
+    s = fresh()
+    card, _ = parse_chat("x", s, mock=[
+        {"type": "task", "task_content": "跟进物流单号", "owner": "老周",
+         "task_deadline": "2026-10-21 17:00"},
+    ], now=NOW)
+    missed = "期限缺失" in card
+    return (not missed), f"误判期限缺失={missed} ｜ {(card.strip() or '(空卡片)').splitlines()[0][:60]}"
+
+
+def probe_bug11():
+    """状态机缺「已取消 / 部分交付」：卡片判 ok，但状态字段不动，语义被静默吞掉。"""
+    s = fresh()
+    parse_chat("x", s, mock=[_order(C_LW, "轴承6204", 100, "6.0", "2026-11-10", "已确认",
+                                    excerpt="轴承 100 个 11-10 交")], now=NOW)
+    parse_chat("x", s, mock=[_order(C_LW, "轴承6204", 100, "6.0", "2026-11-10", "已取消",
+                                    excerpt="那单先取消吧")], now=NOW)
+    r = _rec(s, C_LW)
+    return (r and r.get("status") == "已取消"), f"取消后状态={r and r.get('status')}（期望「已取消」）"
+
+
+def probe_bug12():
+    """纯任务派发（无订单）且信息齐全时，parse_chat 返回空卡片 —— 用户零反馈。"""
+    s = fresh()
+    card, meta = parse_chat("x", s, mock=[
+        {"type": "task", "task_content": "跟进物流单号", "owner": "老周",
+         "task_deadline": "2026-10-22"},
+    ], now=NOW)
+    has_output = bool(card and card.strip())
+    return has_output, f"卡片非空={has_output} ｜ 卡片={card[:40]!r} ｜ 入库任务={len(meta.get('tasks', []))}"
+
+
 def probe_regression_mock_dup():
     """回归验证：网页模拟模式「Mock 重复入库」（历史缺陷，5c507b7 已修）。"""
     s = fresh()
@@ -183,6 +244,48 @@ DEFECTS = [
          where="patch 为空时仍 append((\"update\", existing)) 并生成卡片",
          fix="patch 为空时输出「无需变更，台账已是最新」或直接跳过卡片。",
          probe=probe_bug07),
+    # —— 2026-10-22 走查扩到模块一 v1.1 全集（22 组 / 10 类）后新登记 ——
+    dict(id="BUG-08", severity="🟠 中",
+         title="数量异常偏大未判异常：冲突判定抢先，异常规则缺「暴涨 N 倍」检测",
+         owner="模块二·8 validator.py", who="队友A",
+         where="classify_order 先比对台账数值命中 conflict 分支即返回，"
+               "未给 abnormal 规则（数量暴涨/多打零）留出前置判定；"
+               "当前异常规则仅覆盖负数与交期倒挂",
+         fix="在 classify_order 中让异常判定优先于冲突判定；"
+             "异常规则增补「数量 ≥ 台账 10 倍（或 > 单笔经验上限）」，"
+             "命中即 ⛔ 拦截并要求澄清，而不是降级为冲突。",
+         probe=probe_bug08),
+    dict(id="BUG-09", severity="🟡 低", title="分批交期无法表达，多批次口径被判冲突",
+         owner="模块三 store.py 字段 / 模块二·8 validator.py", who="队友D / 队友A",
+         where="OrderRecord.delivery_date 是单值字段，"
+               "「11-01 出 500 / 11-03 出 400」只能存一个日期，另一批丢失；"
+               "回填报春交期时与台账打架被判冲突",
+         fix="契约 4 增加可选字段 delivery_batches: list[{date, qty}]，"
+             "有分批时冲突比对按批次聚合数量后判断，卡片展示「分两批：…」。",
+         probe=probe_bug09),
+    dict(id="BUG-10", severity="🟠 中", title="任务期限不支持时刻，口语期限被置空",
+         owner="模块二·7 validator.py validate_extraction", who="队友A",
+         where="DATE_RE = ^\\d{4}-\d{2}-\d{2}$ 不接受「2026-10-21 17:00」，"
+               "task_deadline 直接被置 None → classify_task 恒判「期限缺失」",
+         fix="放宽 DATE_RE 支持可选时刻（YYYY-MM-DD[ HH:MM]），"
+             "或在抽取侧把「今天下班前 / 17:00 前」归一化为日期+时刻两字段；"
+             "至少保证带时刻的期限不被静默丢弃。",
+         probe=probe_bug10),
+    dict(id="BUG-11", severity="🟠 中",
+         title="状态机缺「已取消 / 部分交付」，语义被静默吞掉（卡片仍判 ok）",
+         owner="模块二 contracts.STATUS_ORDER / 模块三 store.py", who="队友A / 队友D",
+         where="STATUS_RANK 仅 5 态，无「已取消」「部分交付」；"
+               "apply_change 对未知状态因 rank 取 0 而不推进，卡片仍输出「✅ 已更新订单」",
+         fix="STATUS_ORDER 增补「已取消」「部分交付」两态并给出 rank 位置；"
+             "部分交付需配合字段 delivered_qty / remain_qty（契约 4 只加不改）。",
+         probe=probe_bug11),
+    dict(id="BUG-12", severity="🟠 中", title="纯任务派发且信息齐全时返回空卡片，用户零反馈",
+         owner="模块四·2 agent.py parse_chat", who="队友C",
+         where="out（订单）为空时 first_new=None，for 循环不生成任何卡片；"
+               "任务入库成功但界面无输出 —— 演示「任务派发」场景会静默",
+         fix="orders 为空而 tasks 非空时，单独生成任务卡片（✅ 已登记任务：…负责人/期限），"
+             "保证每条任务都有可见回执。",
+         probe=probe_bug12),
 ]
 
 REGRESSIONS = [

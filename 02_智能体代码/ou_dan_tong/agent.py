@@ -2,7 +2,7 @@
 import datetime
 
 from llm import LLM
-from prompts import card_text, query_text, briefing_text
+from prompts import card_text, query_text, briefing_text, STATUS_ORDER
 from store import Store
 from validator import validate_extraction, apply_change, classify_order, classify_task
 from contracts import CheckStatus
@@ -44,12 +44,21 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
         if existing is not None:
             patch, change = apply_change(existing, o, now=now)
             if patch:
+                # BUG-06 修复：真实变更时同步「原文依据」到台账顶层字段，
+                # 保证"结论 + 依据"同源（队友B 探针登记：数量 6000 时依据仍写 5000）
+                # 只在本次原文非空时覆盖，避免变更消息没带摘录时把旧依据清空
+                _src = (o.get("source_excerpt") or "").strip()
+                if _src:
+                    patch["source_excerpt"] = _src
                 store.update_order(existing["order_id"], patch, change)
                 if "flags" in existing and existing["flags"]:
                     existing["flags"].pop("conflict", None)
                     existing["flags"].pop("missing", None)
                     store.update_order(existing["order_id"], {}, None)
-            out.append(("update", existing))
+                out.append(("update", existing))
+            else:
+                # BUG-07 修复：内容完全一致时不再输出"已更新订单"，标记为无变化
+                out.append(("nochange", existing))
         else:
             o["order_id"] = store.next_order_id(date)
             o["created_at"] = now
@@ -70,6 +79,9 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
         new_tasks.append(t)
     first_new = next((i for i, (k, _) in enumerate(out) if k == "new"), None)
     for i, (kind, rec) in enumerate(out):
+        if kind == "nochange":
+            cards.append(f"⏸️ 无变化：{rec['customer']}的{rec['product']} 数据已一致，未重复写入。")
+            continue
         show_tasks = new_tasks if i == first_new else []
         cards.append(card_text(rec, show_tasks, kind == "new"))
     if skipped:
@@ -187,6 +199,16 @@ def query(question, store: Store, llm: LLM = None):
                 for idx, c in enumerate(reversed(changes), 1):
                     hist_lines.append(_format_change(idx, c))
         return "📜 变更履历追溯：\n" + "\n".join(hist_lines)
+
+    # ---- P0-2 多命中澄清：并列最高分超过 1 单时，反问定位而非一次性罗列 ----
+    # 单命中（top_n == 1）走下面的正常展开；历史追溯分支不受影响（履历本就展示全部）
+    max_hits = len(candidates[0][1])
+    top_n = sum(1 for _, hits in candidates if len(hits) == max_hits)
+    if len(candidates) > 1 and top_n > 1:
+        lines = [f"🤔 找到 {top_n} 单都匹配，请补充产品名或订单号精确定位："]
+        for i, (o, _) in enumerate(candidates[:top_n], 1):
+            lines.append(f"{i}. {o['order_id']} {o['customer']}/{o['product']}（状态{o.get('status')}）")
+        return "\n".join(lines)
 
     lines = []
     for o, hits in candidates:
@@ -350,12 +372,33 @@ _COLLOQUIAL_SYSTEM = (
 )
 
 
+def _check_facts(raw: str, rewritten: str) -> bool:
+    """口语化后事实保全检查（P0-3）：数字集合 / 日期 / 状态值不得增删。
+
+    - 数字严格等集：改写删掉数字（事实丢失）或新编数字（幻觉）都不通过；
+    - 状态值（沟通中/已报价/…）必须原样保留；
+    - 中文数字改写（如 5000→五千）会触发回退 → 保真优先，可接受。
+    """
+    import re as _re
+    nums_raw = set(_re.findall(r"\d+(?:\.\d+)?", raw))
+    nums_new = set(_re.findall(r"\d+(?:\.\d+)?", rewritten))
+    if nums_raw != nums_new:  # 数字被删或新编
+        return False
+    for d in _re.findall(r"\d{4}-\d{2}-\d{2}", raw):
+        if d not in rewritten:  # 日期丢失
+            return False
+    for st in STATUS_ORDER:
+        if st in raw and st not in rewritten:  # 状态值丢失
+            return False
+    return True
+
+
 def _colloquialize(raw_text: str, llm: LLM = None) -> str:
     """模块四·3：把机器化的查询/简报输出改写成口语播报体。
 
     - llm 为 None 或无 key 时，返回原文本（保底，不影响现有功能）
     - LLM 调用失败时，返回原文本（绝不让 LLM 故障拖垮查询）
-    - 防幻觉：system prompt 强约束"只能改写语气，不得添加/修改/删除事实"
+    - 防幻觉（P0-3）：改写后做事实保全校验（数字/日期/状态不得增删），失真则回退原文
     """
     if llm is None:
         return raw_text
@@ -363,6 +406,9 @@ def _colloquialize(raw_text: str, llm: LLM = None) -> str:
         return raw_text
     try:
         result = llm.chat(_COLLOQUIAL_SYSTEM, raw_text).strip()
+        # P0-3：数字/日期/状态被改丢或编造 → 回退原文（检测-修正管线，不依赖二次 LLM）
+        if not _check_facts(raw_text, result):
+            return raw_text
         # 安全兜底：LLM 返回空或过短（可能出错），回退原文
         if not result or len(result) < len(raw_text) * 0.3:
             return raw_text

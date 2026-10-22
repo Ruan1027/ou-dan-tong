@@ -1,7 +1,10 @@
 """模块四 查询应答自测：查询解析/高亮/历史追溯/简报999修复/LLM口语化（无需 Key 可跑）。
 
-归属：队友C（模块四 查询应答）。运行：python test_module4.py
+归属：队友C（模块四 查询应答）。
+运行：python test_module4.py          → 全量 golden（43 场景，改动 query/口语化/prompt 后必跑）
+      python test_module4.py --smoke  → 快速回归集（秒级，开发期每次改动先跑）
 注：test_pipeline.py 归队友B（模块五），本文件独立，避免文件冲突。
+三层约定见 collect_failures.md（golden / smoke / 失败样本收集）。
 """
 import os
 import sys
@@ -382,5 +385,132 @@ def test_module4():
     print(b)
 
 
+def smoke():
+    """P0-4 快速回归集（python test_module4.py --smoke）：守关键链路，秒级跑完。
+
+    与 golden（全量 43 场景）不同，smoke 只覆盖最容易回归的核心路径，
+    改动 query()/_colloquialize()/prompt 或卡片后，先跑这个再跑全量。
+    """
+    import time
+    t0 = time.time()
+    store = Store()
+    store.reset()
+
+    # ① 建单 + 任务（基础链路）
+    _, info = parse_chat("dummy", store, mock=SCENARIO1_MOCK)
+    assert len(info["orders"]) == 2, f"建单数量错误: {info['orders']}"
+    assert len(info["tasks"]) == 1, "任务未入库"
+
+    # ② 变更留痕（qty 5000 → 6000）
+    parse_chat("dummy", store, mock=SCENARIO3_MOCK)
+    nmx = next(o for o in store.orders if o["product"] == "NMX-60 断路器外壳")
+    assert nmx["qty"] == 6000 and len(nmx["changes"]) >= 1, "变更未留痕"
+
+    # ③ 查询带原文依据
+    assert "万博机电" in query("万博那单到哪了？", store), "查询未命中或缺依据"
+
+    # ④ 简报 999 防回归（无交期 → 待定交期）
+    store.reset()
+    store.add_order({
+        "order_id": "ORD-SMK-01", "customer": "无交期客户", "product": "P-SMK",
+        "spec": "", "qty": 10, "unit_price": "待报价", "delivery_date": None,
+        "status": "沟通中", "sample_flag": "无", "source_excerpt": "测试",
+        "created_at": "2026-10-21T00:00:00", "updated_at": "2026-10-21T00:00:00",
+    })
+    b = briefing(store)
+    assert "999" not in b and "待定交期" in b, f"简报 999 回归: {b}"
+
+    # ⑤ 产品查询命中 + 不误伤（构造 3 单）
+    store.reset()
+    for o in [
+        {"order_id": "ORD-S1", "customer": "客户A", "product": "NMX-60 断路器外壳",
+         "spec": "", "qty": 100, "unit_price": "3.2", "delivery_date": "2026-11-20",
+         "status": "生产中", "source_excerpt": "A", "sample_flag": "大货",
+         "created_at": "2026-10-21T10:00:00", "updated_at": "2026-10-21T10:00:00"},
+        {"order_id": "ORD-S2", "customer": "客户B", "product": "TND-3 稳压器",
+         "spec": "", "qty": 200, "unit_price": "待报价", "delivery_date": None,
+         "status": "沟通中", "source_excerpt": "B", "sample_flag": "无",
+         "created_at": "2026-10-21T11:00:00", "updated_at": "2026-10-21T11:00:00"},
+        {"order_id": "ORD-S3", "customer": "客户C", "product": "ABC-100 模具",
+         "spec": "", "qty": 50, "unit_price": "10", "delivery_date": "2026-09-01",
+         "status": "已交付", "source_excerpt": "C", "sample_flag": "无",
+         "created_at": "2026-08-15T00:00:00", "updated_at": "2026-09-05T00:00:00"},
+    ]:
+        store.add_order(dict(o))
+    ans = query("NMX-60 到哪了", store)
+    assert "客户A" in ans and "客户B" not in ans, f"产品查询误命中: {ans}"
+
+    # ⑥ 状态查询 + 无命中兜底（跳过已交付）
+    assert "客户A" in query("生产中的单有哪些", store), "状态查询失败"
+    ans = query("xyz无匹配词", store)
+    assert "未命中" in ans and "客户A" in ans and "客户C" not in ans, f"兜底错误: {ans}"
+
+    # ⑦ 高亮（状态/数量/交期 emoji）
+    ans = query("客户A 生产中的单", store)
+    assert "🏭" in ans and "📦 ×100" in ans and "📅" in ans, f"高亮缺失: {ans}"
+
+    # ⑧ 历史追溯（变更前后值）
+    store.reset()
+    parse_chat("dummy", store, mock=SCENARIO1_MOCK)
+    parse_chat("dummy", store, mock=SCENARIO3_MOCK)
+    h = query("NMX-60 改过啥", store)
+    assert "5000" in h and "6000" in h, f"历史追溯失败: {h}"
+
+    # ⑨ BUG-07：内容一致时 nochange，不误报"已更新订单"
+    store.reset()
+    parse_chat("dummy", store, mock=SCENARIO1_MOCK)
+    card2, info2 = parse_chat("dummy", store, mock=SCENARIO1_MOCK)
+    assert all(k == "nochange" for k, _ in info2["orders"]), "BUG-07 回归"
+    assert "无变化" in card2 and "已更新订单" not in card2, f"BUG-07 卡片: {card2}"
+
+    # ⑩ BUG-06：变更后原文依据同步（结论 + 依据同源）
+    store.reset()
+    parse_chat("dummy", store, mock=[{
+        "type": "order", "customer": "温州机电", "product": "法兰盘", "qty": 5000,
+        "status_hint": "已报价", "source_excerpt": "法兰盘 5000 个，3.2，11-20 交"}])
+    parse_chat("dummy", store, mock=[{
+        "type": "order", "customer": "温州机电", "product": "法兰盘", "qty": 6000,
+        "status_hint": "已报价", "source_excerpt": "法兰盘数量改成 6000 个"}])
+    rec6 = next(o for o in store.orders if o["product"] == "法兰盘")
+    assert rec6["qty"] == 6000 and "6000" in rec6.get("source_excerpt", ""), \
+        f"BUG-06 依据未同步: {rec6.get('source_excerpt')!r}"
+
+    # ⑪ P0-2：多命中澄清（两单同客户不同产品）
+    store.reset()
+    parse_chat("dummy", store, mock=[
+        {"type": "order", "customer": "温州机电", "product": "法兰盘", "qty": 300,
+         "source_excerpt": "法兰盘 300"},
+        {"type": "order", "customer": "温州机电", "product": "阀体", "qty": 200,
+         "source_excerpt": "阀体 200"},
+    ])
+    assert "请补充" in query("温州机电 到哪了", store), "P0-2 澄清未触发"
+
+    # ⑫ P0-3：口语化事实保全（伪 LLM，无 Key 可跑）
+    from agent import _colloquialize
+
+    class _KeepLLM:
+        def chat(self, system, user, json_mode=False):
+            return '温州机电那单法兰盘 ×500，现在生产中，2026-11-20 交付。📎 依据："原文"'
+
+    class _DropLLM:
+        def chat(self, system, user, json_mode=False):
+            return '温州机电的法兰盘，现在生产中，2026-11-20 交付。📎 依据："原文"'
+
+    raw_ok = '温州机电的法兰盘 ×500，当前状态生产中，预计2026-11-20交付。📎 依据："法兰盘 500 个"。'
+    assert _colloquialize(raw_ok, llm=_KeepLLM()) != raw_ok, "P0-3: 事实完整应走通"
+    assert _colloquialize(raw_ok, llm=_DropLLM()) == raw_ok, "P0-3: 删数字应回退原文"
+
+    print(f"SMOKE TESTS PASSED ✅（{time.time() - t0:.2f}s，12 个检查点）")
+
+
 if __name__ == "__main__":
-    test_module4()
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="模块四查询应答自测（三层：golden 全量 / smoke 快速 / failures 收集）")
+    ap.add_argument("--smoke", action="store_true", help="只跑快速回归集（秒级），默认跑全量 43 场景")
+    args = ap.parse_args()
+    if args.smoke:
+        smoke()
+    else:
+        test_module4()
+        print("\n提示：快速回归请用 python test_module4.py --smoke；失败样本记录见 collect_failures.md")

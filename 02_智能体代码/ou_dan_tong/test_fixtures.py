@@ -233,12 +233,66 @@ SCENE_ROUNDS = {
 }
 
 
+def check_fixture_coverage(groups):
+    """校验「走查夹具」对「模块一数据集」的覆盖度。
+
+    这是 2026-10-22 优化后新增的**防漏测闸门**：模块一数据集曾经从 11 组扩到
+    22 组（新增任务派发/取消/部分交付/报价四类），而夹具当时只覆盖前 11 组，
+    走查覆盖率一度只有 50%，是靠人工核对才发现的。此后由本函数自动把关：
+    数据集一旦新增场景而夹具没跟上，走查直接判失败并点名缺哪些 scene_id。
+
+    返回 (problems, stats)：
+      - problems: 未覆盖 / 孤儿夹具 / 缺期望判定 三项问题
+      - stats:    覆盖度统计，供走查报告展示
+    """
+    dataset_ids = [g.get("scene_id") for g in groups]
+    ds_set = set(dataset_ids)
+    fx_set = set(SCENE_ROUNDS)
+
+    missing = [sid for sid in dataset_ids if sid not in fx_set]
+    orphan = sorted(sid for sid in fx_set if sid not in ds_set)
+    no_expect = [sid for sid in dataset_ids
+                 if sid not in EXPECTED_TARGET
+                 and not (groups[dataset_ids.index(sid)]
+                          .get("expected", {}).get("validator_target"))]
+
+    problems = []
+    if missing:
+        problems.append(
+            f"夹具未覆盖 {len(missing)} 个场景：{missing} "
+            f"→ 数据集已扩充，请补 SCENE_ROUNDS（否则走查覆盖率虚高）")
+    if orphan:
+        problems.append(f"夹具存在孤儿场景 {orphan}（数据集已无此 scene_id，请清理）")
+    if no_expect:
+        problems.append(f"以下场景缺少期望判定：{no_expect}")
+
+    # 按场景类型的覆盖度统计
+    by_type = {}
+    for g in groups:
+        sid = g.get("scene_id")
+        t = g.get("scene_type", "?")
+        e = by_type.setdefault(t, {"total": 0, "covered": 0})
+        e["total"] += 1
+        if sid in fx_set:
+            e["covered"] += 1
+
+    stats = {
+        "scenes_total": len(dataset_ids),
+        "scenes_covered": len(dataset_ids) - len(missing),
+        "rounds_total": sum(len(v) for v in SCENE_ROUNDS.values()),
+        "by_type": by_type,
+        "missing": missing,
+        "orphan": orphan,
+    }
+    return problems, stats
+
+
 def iter_scene_rounds(groups):
     """按模块一数据文件顺序产出 (scene, round_index, rounds, mock)。"""
     for g in groups:
         sid = g.get("scene_id")
         rounds = SCENE_ROUNDS.get(sid)
         if rounds is None:
-            continue          # 模块一新增场景未配夹具时跳过，由走查报告提示
+            continue          # 模块一新增场景未配夹具时跳过，由覆盖度闸门报警
         for i, mock in enumerate(rounds):
             yield g, i, mock

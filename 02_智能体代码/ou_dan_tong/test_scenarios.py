@@ -20,9 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from store import Store
 from agent import parse_chat
-from test_fixtures import (load_chat_logs, check_contract1, iter_scene_rounds,
-                           EXPECTED_TARGET, ROUND_EXPECT, SCENE_ROUNDS,
-                           _norm_date, FIXED_NOW)
+from test_fixtures import (load_chat_logs, check_contract1, check_fixture_coverage,
+                           iter_scene_rounds, EXPECTED_TARGET, ROUND_EXPECT,
+                           SCENE_ROUNDS, _norm_date, FIXED_NOW)
 
 # 卡片前缀 → 判定（与 agent.parse_chat 的可见话术一一对应）
 VERDICT_BY_MARK = [("⛔", "abnormal"), ("⚠️", "conflict"),
@@ -82,6 +82,10 @@ def run():
     groups = load_chat_logs()
     problems, by_type = check_contract1(groups)
 
+    # 覆盖度闸门：数据集扩充而夹具没跟上时直接判失败（2026-10-22 新增）
+    cov_problems, cov = check_fixture_coverage(groups)
+    problems = list(problems) + cov_problems
+
     print("=" * 78)
     print("模块五·2 场景走查 —— 数据源：03_演示数据/data/chat_logs.json")
     print("=" * 78)
@@ -93,6 +97,15 @@ def run():
         print("   ✅ 契约1 字段齐全、组内时间升序、五类场景每类≥2 组、动态演进≥1 组")
     for t in sorted(by_type):
         print(f"   · {t}：{len(by_type[t])} 组 → {by_type[t]}")
+
+    print(f"\n[1b] 走查夹具覆盖度闸门（数据集 {cov['scenes_total']} 组）")
+    pct = (cov["scenes_covered"] / cov["scenes_total"] * 100) if cov["scenes_total"] else 0
+    flag = "✅" if not cov["missing"] else "❌"
+    print(f"   {flag} 场景覆盖 {cov['scenes_covered']}/{cov['scenes_total']} ({pct:.0f}%)"
+          f" ｜ 走查轮次 {cov['rounds_total']} 轮")
+    for t in sorted(cov["by_type"]):
+        e = cov["by_type"][t]
+        print(f"      · {t}：{e['covered']}/{e['total']} 组已配夹具")
 
     store = Store()
     store.reset()
@@ -181,11 +194,73 @@ def run():
         for sid, rnd, exp, act, why in failures:
             print(f"   ❌ {sid} 第{rnd+1}轮：期望 {exp} / 实际 {act} ｜ {why}")
 
+    audit_whitelist(rows)
+
     if problems or failures:
         raise AssertionError(
             f"场景走查未通过：数据问题 {len(problems)} 项、断言失败 {len(failures)} 项")
     print("\n✅ 模块五·2 场景走查完成（偏差项已归责登记）")
     return rows, deviations
+
+
+def audit_whitelist(rows):
+    """白名单自维护体检（2026-10-22 新增）。
+
+    ALLOWED_DEVIATIONS 是硬编码的「已知偏差」豁免表，随着队友修复推进它会过时。
+    过时的白名单会**掩盖真实回归**（本该失败的项被静默豁免），所以这里做三项体检：
+
+      1. 失效项：白名单里的 (场景, 轮次) 本轮已经通过 → 该偏差已消失，应移除豁免；
+      2. 孤儿归责：白名单引用的 BUG-ID 在缺陷看板里不存在（拼错或已下线）；
+      3. 探针已绿但场景仍偏差：说明「最小复现修好了、完整场景仍残留」，提示归属人复核。
+
+    本节只输出提示、不判失败 —— 白名单清理属于测试负责人的主动维护动作，
+    但若长期不清理会自动累积噪音，故在此显式点名。
+    """
+    try:
+        from test_defects import DEFECTS as _DEFECTS
+        known_ids = {d["id"] for d in _DEFECTS}
+        fixed_map = None
+    except Exception:      # 缺陷看板不可用时跳过第 2/3 项
+        known_ids, fixed_map = None, None
+
+    ok_keys = {(r[0], r[1]) for r in rows if r[5]}
+    stale = sorted(k for k in ALLOWED_DEVIATIONS if k in ok_keys)
+    orphan = []
+    probe_green = []
+    if known_ids is not None:
+        for k, (bug, _why) in ALLOWED_DEVIATIONS.items():
+            if bug not in known_ids:
+                orphan.append((k, bug))
+        # 只对仍偏差的项做「探针已绿」提示
+        if fixed_map is None:
+            try:
+                from test_defects import DEFECTS as D2
+                for k, (bug, _why) in ALLOWED_DEVIATIONS.items():
+                    if k in ok_keys or bug not in known_ids:
+                        continue
+                    d = next(x for x in D2 if x["id"] == bug)
+                    fixed, _ev = d["probe"]()
+                    if fixed:
+                        probe_green.append((k, bug))
+            except Exception:
+                pass
+
+    print("\n[4] 白名单自检（ALLOWED_DEVIATIONS 维护体检）")
+    if not (stale or orphan or probe_green):
+        print("   ✅ 无失效项、无孤儿归责、无「探针已绿但场景仍偏差」项")
+        return
+    if stale:
+        print(f"   🧹 {len(stale)} 项已失效（本轮已通过，建议移除豁免，避免掩盖回归）：")
+        for sid, rnd in stale:
+            print(f"      · {sid} 第{rnd+1}轮 → {ALLOWED_DEVIATIONS[(sid, rnd)][0]}")
+    if orphan:
+        print("   🔗 归责到不存在的缺陷 ID（请核对拼写或已下线）：")
+        for (sid, rnd), bug in orphan:
+            print(f"      · {sid} 第{rnd+1}轮 → {bug}")
+    if probe_green:
+        print("   🔍 探针已转绿但完整场景仍偏差（最小复现已修、场景残留，提示归属人复核）：")
+        for (sid, rnd), bug in probe_green:
+            print(f"      · {sid} 第{rnd+1}轮 → {bug}")
 
 
 if __name__ == "__main__":

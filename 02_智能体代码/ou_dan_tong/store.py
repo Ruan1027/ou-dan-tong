@@ -19,7 +19,7 @@ import datetime
 import copy
 
 from config import DATA_DIR
-from contracts import STATUS_ORDER, STATUS_RANK
+from contracts import STATUS_ORDER, STATUS_RANK, TERMINAL_STATUSES
 
 # 任务清单口径（待确认→生产中→已发货→已完成）与契约口径（沟通中→…→已交付）的别名映射。
 # 契约 STATUS_ORDER 是单一真相源，别名仅做归一化，不新增状态。
@@ -50,6 +50,8 @@ def can_transition(old_status, new_status):
     """状态机判定：仅允许沿 STATUS_ORDER 向前流转（同值视为无操作，返回 True）。
 
     占位单「待补充」是缺失信息时的临时态，补全后可进入任意合法状态。
+    BUG-11 修复：新增「已取消」终态——可从任一非「已交付」活跃态进入，
+    进入后不可再流转；「已交付」后不可取消。
     """
     o, n = normalize_status(old_status), normalize_status(new_status)
     if n is None:
@@ -58,6 +60,12 @@ def can_transition(old_status, new_status):
         return True
     if o is None:
         return False
+    # 终态（已取消）进入后不可再流转
+    if o in TERMINAL_STATUSES:
+        return o == n
+    # 已取消可从任一活跃态进入，但已交付后不可取消
+    if n == "已取消":
+        return o != "已交付"
     return STATUS_RANK[n] >= STATUS_RANK[o]
 
 
@@ -152,6 +160,10 @@ class Store:
             o["status"] = st
         o.setdefault("sample_flag", "无")
         o.setdefault("source_excerpt", "")
+        # BUG-11 修复：部分交付 / 分批交期 支撑字段（仅加不改，缺省 None）
+        o.setdefault("delivered_qty", None)
+        o.setdefault("remain_qty", None)
+        o.setdefault("delivery_batches", None)
         o.setdefault("created_at", o.get("updated_at") or _now())
         o.setdefault("updated_at", _now())
         o.setdefault("flags", {})

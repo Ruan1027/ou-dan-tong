@@ -6,7 +6,7 @@ EXTRACTION_SYSTEM = """你是制造企业订单要素提取器。从聊天记录
  "type": "order" | "task",
  "customer": "公司简称（务必带出归属客户，缺则填 null）", "product": "", "spec": "", "qty": null,
  "unit_price": "可含'待报价'", "delivery_date": "YYYY-MM-DD|null",
- "sample_flag": "打样|大货|无", "status_hint": "沟通中|已报价|已确认|生产中|已交付|null",
+ "sample_flag": "打样|大货|无", "status_hint": "沟通中|已报价|已确认|生产中|部分交付|已交付|已取消|null",
  "task_content": "", "owner": "", "task_deadline": "YYYY-MM-DD|null",
  "source_excerpt": "支撑本结论的原文片段，≤100字"
 }]
@@ -25,8 +25,8 @@ QUERY_SYSTEM = """根据查询结果用中文口语回答，每条结论后必�
 
 BRIEFING_SYSTEM = """把以下聚合数据汇总成一份简洁的今日订单协同简报，中文，分条列出，不要编造数字。"""
 
-STATUS_ORDER = ["沟通中", "已报价", "已确认", "生产中", "已交付"]
-STATUS_RANK = {s: i for i, s in enumerate(STATUS_ORDER)}
+# 状态机单一真相源：直接复用 contracts.py（避免两份定义漂移，见 BUG-11 修复）
+from contracts import STATUS_ORDER, STATUS_RANK, TERMINAL_STATUSES  # noqa: E402,F401
 
 
 def card_text(order: dict, tasks: list, is_new: bool) -> str:

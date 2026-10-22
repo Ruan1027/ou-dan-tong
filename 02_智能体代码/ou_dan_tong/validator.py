@@ -15,6 +15,8 @@ from contracts import CheckStatus, ValidationResult, CHANGE_VERBS
 from prompts import STATUS_RANK
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# 任务期限支持可选时刻（BUG-10 修复）：YYYY-MM-DD 或 YYYY-MM-DD HH:MM
+DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$")
 # 变更动词以 contracts.CHANGE_VERBS 为单一真相源（避免本地重复定义漂移，见 BUG-02 修复）
 _FIELD_CN = {"qty": "数量", "unit_price": "单价", "delivery_date": "交期", "status": "状态"}
 
@@ -77,7 +79,7 @@ def validate_extraction(raw):
                 skipped.append(item)
                 continue
             td = item.get("task_deadline")
-            if td and not DATE_RE.match(str(td)):
+            if td and not DATETIME_RE.match(str(td)):
                 td = None
             tasks.append({
                 "content": content,
@@ -159,6 +161,18 @@ def classify_order(o: dict, existing: dict = None, order_date: str = None) -> Va
                 message=f"数量 {qty} 为负数，疑似笔误，已拦截未写入，请确认正确数量。",
                 patch=None,
             )
+        # BUG-08 修复：数量暴涨/骤降（疑似多打零/笔误）优先判异常，而非降级为冲突。
+        # 仅在无明确变更动词时拦截，避免正常「加到 5000」被误伤。
+        if existing is not None and not _has_change_verb(o.get("source_excerpt", "") or o.get("raw", "")):
+            eq = existing.get("qty")
+            if _meaningful(eq) and _meaningful(qty):
+                eqi, nqi = _to_int(eq), _to_int(qty)
+                if eqi and nqi and (nqi >= 10 * eqi or eqi >= 10 * nqi):
+                    return ValidationResult(
+                        CheckStatus.ABNORMAL,
+                        message=f"数量 {qty} 与台账 {eq} 相差超过 10 倍（疑似多打零或笔误），已拦截未写入，请确认正确数量。",
+                        patch=None,
+                    )
     dd = o.get("delivery_date")
     if dd and not DATE_RE.match(str(dd)):
         return ValidationResult(
@@ -205,6 +219,17 @@ def classify_order(o: dict, existing: dict = None, order_date: str = None) -> Va
             return ValidationResult(
                 CheckStatus.MISSING,
                 message="信息不全，已登记占位待补：" + "、".join(miss) + "缺失，请补充后我再正式建单。",
+                patch=None,
+            )
+
+    # 3.5 BUG-01' 修复：命中既有实体但数量/交期全空且无变更意图
+    # → 视为补充确认追问，而非「无变化」（避免"已更新"误导）。
+    if existing is not None:
+        verb = _has_change_verb(o.get("source_excerpt", "") or o.get("raw", ""))
+        if not verb and not _meaningful(o.get("qty")) and not _meaningful(o.get("delivery_date")):
+            return ValidationResult(
+                CheckStatus.MISSING,
+                message="这单已存在，但数量和交期还缺着——确认下数量/交期，我再正式补登？",
                 patch=None,
             )
 

@@ -159,7 +159,7 @@ def test_state_machine():
     assert can_transition("沟通中", "已报价") is True
     assert can_transition("已确认", "沟通中") is False
     assert can_transition(PLACEHOLDER_STATUS, "已确认") is True
-    assert next_statuses("已确认") == ["生产中", "已交付"], next_statuses("已确认")
+    assert next_statuses("已确认") == ["生产中", "部分交付", "已交付", "已取消"], next_statuses("已确认")
 
     s, d = _tmp_store()
     try:

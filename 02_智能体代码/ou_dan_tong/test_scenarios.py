@@ -129,34 +129,38 @@ def run():
         if ok and expect == "ok" and is_last_round:
             # ok 场景：额外校验 expected.fields 是否落到台账
             exp_fields = scene.get("expected", {}).get("fields", {}) or {}
-            cust = mock[0]["customer"]
-            prod = mock[0]["product"]
-            rec = next((o for o in store.orders
-                        if o["customer"] == cust and o["product"] == prod), None)
-            if rec is None:
-                ok, extra = False, "台账未找到该实体"
-            else:
-                if "数量" in exp_fields:
-                    want, got = int(exp_fields["数量"]), rec.get("qty")
-                    if want != got:
-                        ok, extra = False, f"数量期望{want}实际{got}"
-                if ok and "交期" in exp_fields:
-                    want = _norm_date(exp_fields["交期"])
-                    got = rec.get("delivery_date")
-                    if want and want != got:
-                        ok, extra = False, f"交期期望{want}实际{got}"
+            cust = mock[0].get("customer")
+            prod = mock[0].get("product")
+            # 任务型场景（mock[0] 为任务 dict，无 customer/product）不做订单字段落库校验
+            if cust and prod:
+                rec = next((o for o in store.orders
+                            if o["customer"] == cust and o["product"] == prod), None)
+                if rec is None:
+                    ok, extra = False, "台账未找到该实体"
+                else:
+                    if "数量" in exp_fields:
+                        want, got = int(exp_fields["数量"]), rec.get("qty")
+                        if want != got:
+                            ok, extra = False, f"数量期望{want}实际{got}"
+                    if ok and "交期" in exp_fields:
+                        want = _norm_date(exp_fields["交期"])
+                        got = rec.get("delivery_date")
+                        if want and want != got:
+                            ok, extra = False, f"交期期望{want}实际{got}"
         # 语义落库校验：卡片判 ok 但仍可能「静默吞掉语义」（如部分交付未转状态）
         if ok and key in EXPECT_STATUS:
             want_status, bug = EXPECT_STATUS[key]
-            cust = mock[0]["customer"]
-            prod = mock[0]["product"]
-            rec = next((o for o in store.orders
-                        if o["customer"] == cust and o["product"] == prod), None)
-            got = (rec or {}).get("status")
-            if got != want_status:
-                ok = False
-                extra = (f"{bug}：状态期望「{want_status}」实际「{got}」"
-                         f"（语义未落地）")
+            cust = mock[0].get("customer")
+            prod = mock[0].get("product")
+            # 任务型场景跳过订单状态校验
+            if cust and prod:
+                rec = next((o for o in store.orders
+                            if o["customer"] == cust and o["product"] == prod), None)
+                got = (rec or {}).get("status")
+                if got != want_status:
+                    ok = False
+                    extra = (f"{bug}：状态期望「{want_status}」实际「{got}」"
+                             f"（语义未落地）")
 
         if ok and expect == "abnormal":
             if len(store.orders) != before:

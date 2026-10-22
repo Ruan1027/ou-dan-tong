@@ -289,6 +289,94 @@ def test_module4():
     assert any(k == "update" for k, _ in info3["orders"]), \
         f"BUG-07 过度修复: 真实变更应标记 update: {[k for k, _ in info3['orders']]}"
 
+    # ---- BUG-06 防回归：变更后「原文依据」同步（结论 + 依据同源）----
+    # 场景37：数量 5000→6000 后，顶层 source_excerpt 应同步为本次原文（含 6000），
+    #         且查询卡片展示的依据也是最新的（评委追问"依据里怎么是 5000"不穿帮）
+    store.reset()
+    _C1, _P1 = "温州机电", "法兰盘"
+    parse_chat("dummy", store, mock=[{
+        "type": "order", "customer": _C1, "product": _P1, "qty": 5000,
+        "unit_price": "3.2", "delivery_date": "2026-11-20",
+        "status_hint": "已报价", "source_excerpt": "法兰盘 5000 个，3.2，11-20 交"}])
+    parse_chat("dummy", store, mock=[{
+        "type": "order", "customer": _C1, "product": _P1, "qty": 6000,
+        "unit_price": "3.2", "delivery_date": "2026-11-20",
+        "status_hint": "已报价", "source_excerpt": "法兰盘数量改成 6000 个"}])
+    rec6 = next(o for o in store.orders if o["customer"] == _C1 and o["product"] == _P1)
+    assert rec6["qty"] == 6000, f"BUG-06: 数量应更新为 6000: {rec6}"
+    assert "6000" in rec6.get("source_excerpt", ""), \
+        f"BUG-06: 依据应同步为本次原文: {rec6.get('source_excerpt')!r}"
+    q6 = query(f"{_C1} {_P1} 到哪了", store)
+    assert "6000" in q6, f"BUG-06: 查询展示的依据应为最新原文: {q6}"
+    # 变更履历记录本次变更时带各自原文依据（建单本身不留履历，故此处仅 1 条）
+    h6 = query(f"{_C1} {_P1} 变更历史", store)
+    assert "改成 6000" in h6, f"BUG-06: 履历应带本次变更依据: {h6}"
+
+    # 场景38：变更消息没带原文摘录时，保留旧依据不清空（防误删）
+    store.reset()
+    parse_chat("dummy", store, mock=[{
+        "type": "order", "customer": _C1, "product": _P1, "qty": 5000,
+        "source_excerpt": "法兰盘 5000 个"}])
+    parse_chat("dummy", store, mock=[{
+        "type": "order", "customer": _C1, "product": _P1, "qty": 6000,
+        "source_excerpt": ""}])
+    rec8 = next(o for o in store.orders if o["customer"] == _C1 and o["product"] == _P1)
+    assert rec8["qty"] == 6000, f"BUG-06: 数量应更新: {rec8}"
+    assert "5000" in rec8.get("source_excerpt", ""), \
+        f"BUG-06: 无新原文时不应清空旧依据: {rec8.get('source_excerpt')!r}"
+
+    # ---- P0-2：查询多命中澄清（并列最高分 >1 单时反问，而非罗列）----
+    # 场景39：两单同客户不同产品，问"温州机电 到哪了"→ 澄清，含候选清单
+    store.reset()
+    parse_chat("dummy", store, mock=[
+        {"type": "order", "customer": "温州机电", "product": "法兰盘",
+         "qty": 300, "source_excerpt": "法兰盘 300 个"},
+        {"type": "order", "customer": "温州机电", "product": "阀体",
+         "qty": 200, "source_excerpt": "阀体 200 个"},
+    ])
+    ans = query("温州机电 到哪了", store)
+    assert "请补充" in ans, f"P0-2: 多命中应追问: {ans}"
+    assert "2 单" in ans, f"P0-2: 应提示命中单数: {ans}"
+    assert "法兰盘" in ans and "阀体" in ans, f"P0-2: 候选清单应列出两单: {ans}"
+    assert "当前状态" not in ans, f"P0-2: 澄清时不应展开明细: {ans}"
+
+    # 场景40：单命中（补充产品名后唯一）→ 走正常展开，不误伤
+    ans = query("温州机电 法兰盘 到哪了", store)
+    assert "请补充" not in ans, f"P0-2 误伤: 单命中不应追问: {ans}"
+    assert "法兰盘" in ans and "当前状态" in ans, f"P0-2: 单命中应正常展开: {ans}"
+
+    # ---- P0-3：口语化后事实保全校验（_colloquialize 逻辑，无 Key 可跑）----
+    from agent import _check_facts, _colloquialize
+
+    class _GoodLLM:
+        """改写保留全部事实（数字/日期/状态）"""
+        def chat(self, system, user, json_mode=False):
+            return '温州机电那单法兰盘 ×500，现在生产中，2026-11-20 交付。📎 依据："原文"'
+
+    class _DropNumLLM:
+        """改丢数字：500 被删掉"""
+        def chat(self, system, user, json_mode=False):
+            return '温州机电的法兰盘，现在生产中，2026-11-20 交付。📎 依据："原文"'
+
+    class _AddNumLLM:
+        """编造数字：多出一个 999"""
+        def chat(self, system, user, json_mode=False):
+            return '温州机电的法兰盘 ×500 个，单价 999，2026-11-20 交付。📎 依据："原文"'
+
+    raw_ok = '温州机电的法兰盘 ×500，当前状态生产中，预计2026-11-20交付。📎 依据："法兰盘 500 个"。'
+
+    # 场景41：事实全部保留 → 走通口语化，返回改写文本
+    out41 = _colloquialize(raw_ok, llm=_GoodLLM())
+    assert out41 != raw_ok and "500" in out41, f"P0-3: 事实完整应走通: {out41!r}"
+
+    # 场景42：改动丢失数字 → 回退原文
+    out42 = _colloquialize(raw_ok, llm=_DropNumLLM())
+    assert out42 == raw_ok, f"P0-3: 删数字应回退原文: {out42!r}"
+
+    # 场景43：改增添数字（幻觉）→ 回退原文
+    out43 = _colloquialize(raw_ok, llm=_AddNumLLM())
+    assert out43 == raw_ok, f"P0-3: 编数字应回退原文: {out43!r}"
+
     print("ALL TESTS PASSED ✅")
     print("-" * 40)
     print(b)

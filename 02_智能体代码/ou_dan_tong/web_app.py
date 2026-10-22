@@ -73,6 +73,12 @@ def do_chat(text, scenario=None):
         mock = _pick_mock(scenario, text) if USE_MOCK else None
         result = handle_message(text, _store, llm=_llm, mock=mock)
     result["ledger"] = ledger_state()
+    # 模拟模式提示：未接入 API Key 时输入不真实解析、展示预置演示数据；
+    # 配置 DEEPSEEK_API_KEY 后进入真实模式，此提示自动隐藏
+    if not _llm:
+        result["reply"] = result["reply"] + (
+            "\n\n⚠️ 模拟模式：当前展示预置演示数据，输入不会真实解析。"
+            "配置 DEEPSEEK_API_KEY 后自动进入真实模式。")
     return result
 
 

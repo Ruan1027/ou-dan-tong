@@ -55,6 +55,17 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
                     existing["flags"].pop("conflict", None)
                     existing["flags"].pop("missing", None)
                     store.update_order(existing["order_id"], {}, None)
+                # BUG-09 修复：识别分批交期写入 delivery_batches + 已交付/余量
+                _batches = _parse_batches(_src)
+                if _batches:
+                    existing["delivery_batches"] = _batches
+                    delivered = sum(b["qty"] for b in _batches)
+                    existing["delivered_qty"] = delivered
+                    try:
+                        existing["remain_qty"] = int(existing.get("qty") or 0) - delivered
+                    except (TypeError, ValueError):
+                        existing["remain_qty"] = None
+                    store.update_order(existing["order_id"], {}, None)
                 out.append(("update", existing))
             else:
                 # BUG-07 修复：内容完全一致时不再输出"已更新订单"，标记为无变化
@@ -84,6 +95,10 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
             continue
         show_tasks = new_tasks if i == first_new else []
         cards.append(card_text(rec, show_tasks, kind == "new"))
+    # BUG-12 修复：纯任务派发（无订单）且信息齐全时，也要给每条任务可见回执
+    if not out and new_tasks:
+        for t in new_tasks:
+            cards.append(_task_card(t))
     if skipped:
         cards.append(f"⚠️ 有 {len(skipped)} 条信息不全（缺客户或产品），已跳过，待人工确认。")
     return "\n\n".join(cards), {"orders": out, "tasks": new_tasks, "skipped": len(skipped)}
@@ -115,6 +130,8 @@ def query(question, store: Store, llm: LLM = None):
         "已确认": ["已确认", "确认了", "下单了"],
         "生产中": ["生产中", "在生产", "排产", "做货", "在做"],
         "已交付": ["已交付", "已发货", "发了", "送了", "交付"],
+        "部分交付": ["部分交付", "分批", "分两批", "交了一部分", "出了一批"],
+        "已取消": ["已取消", "取消了", "取消订单", "作废", "不要了"],
     }
     target_status = None
     for st, kws in status_keywords.items():
@@ -169,7 +186,7 @@ def query(question, store: Store, llm: LLM = None):
 
     # 4. 无任何命中 → 兜底返回全部在途（保留原引导语义）
     if not candidates:
-        in_progress = [o for o in store.orders if o.get("status") != "已交付"]
+        in_progress = [o for o in store.orders if o.get("status") not in ("已交付", "已取消")]
         if not in_progress:
             return "台账中没有找到相关订单，可尝试换称呼、按产品问（如「NMX-60 到哪了」），或查看全部在途订单。"
         return "未命中具体客户/产品/状态，以下是全部在途订单：\n" + "\n".join(
@@ -231,6 +248,26 @@ def _suggest(o: dict) -> str:
     return ""
 
 
+def _task_card(t: dict) -> str:
+    """BUG-12 修复：为单条任务生成可见回执卡片（纯任务派发也能看到反馈）。"""
+    owner = (t.get("owner") or "").strip() or "待认领"
+    deadline = t.get("deadline") or "待定"
+    return f"✅ 已登记任务：{t.get('content')} ｜ 负责人：{owner} ｜ 期限：{deadline}"
+
+
+def _parse_batches(text: str):
+    """BUG-09 修复：从「分两批：11-01 出 500，11-03 出 400」抽取批次列表。无则 None。"""
+    if not text or "分批" not in text:
+        return None
+    import re as _re
+    items = []
+    for m in _re.finditer(r"(\d{1,2})[-/](\d{1,2})\s*出\s*(\d+)", text):
+        mo, day, qty = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        year = datetime.date.today().year
+        items.append({"date": f"{year:04d}-{mo:02d}-{day:02d}", "qty": qty})
+    return items or None
+
+
 def _highlight_query_text(order: dict, suggestion: str = "") -> str:
     """模块四·2：在原 query_text 基础上给关键字段（状态/数量/交期）加 emoji 高亮，
     并在有变更履历时附加"本单有 N 次变更记录"提示。
@@ -265,6 +302,8 @@ def _status_emoji(status: str) -> str:
         "已确认": "✅",
         "生产中": "🏭",
         "已交付": "🚚",
+        "部分交付": "📦",
+        "已取消": "🚫",
     }.get(status, "🔹")
 
 

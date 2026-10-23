@@ -272,7 +272,7 @@
       <div class="wx-input">
         <input id="wxSender" class="wx-sender" value="王总" title="这条消息是谁发的。平台直接面向顾客，发信人即客户本人。"
                placeholder="发言人" />
-        <textarea id="wxInput" placeholder="以客户身份输入消息，如：小陈，法兰那批再给我加 200 个"></textarea>
+        <textarea id="wxInput" placeholder="以客户身份输入消息，如：小陈，DZ47 那个加到 80 个"></textarea>
         <button type="button" onclick="wxSendInput()">发送</button>
       </div>
     </div>
@@ -339,7 +339,7 @@ const CHAT_SCENARIOS = [
   { label:"✏️ 客户改数量", scenario:"update", sender:"李姐",
     text:"小陈，DZ47 那个加到 80 个" },
   { label:"📥 客户追加订单", scenario:"append", sender:"王总",
-    text:"小陈，法兰那批再给我加 200 个，跟上次一起发" },
+    text:"小陈，法兰那批的货再排一批 300 个的，单价还是 18.5，11-15 交，跟原来那单分开走" },
   { label:"🟡 客户信息缺失", scenario:"missing", sender:"王总",
     text:"小陈，法兰那批的货再帮我排上一批，我这边急" },
   { label:"⚠️ 客户数据冲突", scenario:"conflict", sender:"王总",

@@ -131,11 +131,13 @@ WEB_SCENARIO_MOCKS = {
          "qty": None, "unit_price": "待报价", "delivery_date": None, "status_hint": "沟通中",
          "sample_flag": "无", "source_excerpt": "小陈，法兰那批的货再帮我排上一批，我这边急"},
     ],
-    # 追加：数量明确 → 新开一条追加单挂到原单 ORD-01 下，原单数量不变
+    # 追加：数量明确 → 新开一条追加单挂到原单 ORD-01 下，原单数量不变。
+    # 话术要点（2026-10-23 用户口径）：追加的标志是「另外排一批 / 分开走」；
+    # 「再加 200 个，跟上次一起发」= 在原单上加量，算改数量不算追加。
     "append": [
         {"type": "order", "intent": "append", "customer": "王总（永嘉精密机械）", "product": "304法兰盘 DN80", "spec": "",
-         "qty": 200, "unit_price": "18.5", "delivery_date": "2026-11-05", "status_hint": "已确认",
-         "sample_flag": "无", "source_excerpt": "小陈，法兰那批再给我加 200 个，跟上次一起发"},
+         "qty": 300, "unit_price": "18.5", "delivery_date": "2026-11-15", "status_hint": "已确认",
+         "sample_flag": "无", "source_excerpt": "小陈，法兰那批的货再排一批 300 个的，单价还是 18.5，11-15 交，跟原来那单分开走"},
     ],
     "conflict": [
         {"type": "order", "intent": "update", "customer": "王总（永嘉精密机械）", "product": "304法兰盘 DN80",

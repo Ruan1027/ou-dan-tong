@@ -24,7 +24,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from store import Store
+from store import Store, effective_delivery_date, _valid_batches, _invalid_batches
 from agent import parse_chat, query, briefing
 from sim_chats import (SCENARIO1_MOCK, SCENARIO3_MOCK, SEED_MOCK,
                        SCENARIO_CONFLICT_MOCK, SCENARIO_ABNORMAL_MOCK,
@@ -250,6 +250,54 @@ def test_pipeline():
     ck.ok(s8.tasks[0]["task_id"].startswith("TSK-"), "T13 任务号格式应为 TSK-*",
           s8.tasks[0].get("task_id"))
     ck.ok(s8.tasks[0]["owner"] == "老周", "T13 任务应保留负责人", s8.tasks[0].get("owner"))
+
+    # ---------------- T14 批次交期契约（D-1/D-3，PR #14 合入） ----------------
+    # store.effective_delivery_date / _valid_batches / _invalid_batches 是
+    # 模块三新公开的批次语义口径，A-2（validator 冲突比对）将消费它。
+    # 模块五先把契约锁死：口径一旦被改动，这里立刻红，避免 A-2 接到错误语义。
+    ck.section("T14 批次交期契约（effective_delivery_date）")
+    # ① 无批次：回退单值 delivery_date
+    ck.ok(effective_delivery_date({"delivery_date": "2026-11-03"}) == "2026-11-03",
+          "T14 无批次时应回退 delivery_date")
+    # ② 有批次：取最晚批次日期（全部批次交完才算交完）
+    o_b = {"delivery_date": "2026-11-01",
+           "delivery_batches": [{"qty": 500, "date": "2026-11-01"},
+                                {"qty": 400, "date": "2026-11-03"}]}
+    ck.ok(effective_delivery_date(o_b) == "2026-11-03",
+          "T14 有批次时应取最晚批次日期（11-03），而非单值字段（11-01）",
+          effective_delivery_date(o_b))
+    # ③ 非法批次被剔除：假日期 2026-13-01（日历上不存在）不得参与
+    o_bad = {"delivery_date": "2026-11-03",
+             "delivery_batches": [{"qty": 500, "date": "2026-13-01"},
+                                  {"qty": 400, "date": "2026-11-02"}]}
+    ck.ok(effective_delivery_date(o_bad) == "2026-11-02",
+          "T14 假日期批次（2026-13-01）应被剔除，取合法批次最晚值",
+          effective_delivery_date(o_bad))
+    ck.ok(len(_invalid_batches(o_bad)) == 1,
+          "T14 _invalid_batches 应诊断出被剔除的条目及原因",
+          _invalid_batches(o_bad))
+    # ④ 批次全非法：回退单值字段，不得返回 None/抛异常
+    o_allbad = {"delivery_date": "2026-11-05",
+                "delivery_batches": [{"qty": -1, "date": "2026-11-01"},
+                                     {"qty": "五百", "date": "2026-11-02"}]}
+    ck.ok(effective_delivery_date(o_allbad) == "2026-11-05",
+          "T14 批次全非法（负数量/非整数）应回退 delivery_date",
+          effective_delivery_date(o_allbad))
+    ck.ok(_valid_batches(o_allbad) == [],
+          "T14 批次全非法时 _valid_batches 应为空列表")
+    # ⑤ 全空：返回 None（不抛异常）
+    ck.ok(effective_delivery_date({}) is None,
+          "T14 无任何交期信息应返回 None 而非抛异常")
+    # ⑥ 全链路：分批消息落库后，台账单应带批次且有效交期为最晚批次
+    s9 = Store()
+    s9.reset()
+    parse_chat("x", s9, mock=[_order(customer="阿珍（鹿城鞋材）", product="PU 皮鞋面",
+               qty=900, delivery_date="2026-11-03", status_hint="已确认",
+               source_excerpt="分两批：11-01 出 500，11-03 出 400")], now=NOW)
+    rec9 = next((o for o in s9.orders if "PU 皮鞋面" in str(o.get("product", ""))), None)
+    ck.ok(rec9 is not None and effective_delivery_date(rec9) == "2026-11-03",
+          "T14 全链路：分批单落库后有效交期应为最晚批次 11-03",
+          rec9 and effective_delivery_date(rec9))
 
     ck.report()
     print("-" * 46)

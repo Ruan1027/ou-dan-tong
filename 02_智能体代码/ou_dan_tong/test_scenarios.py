@@ -30,36 +30,45 @@ VERDICT_BY_MARK = [("⛔", "abnormal"), ("⚠️", "conflict"),
 
 # 已知偏差白名单：(scene_id, round) -> (BUG-ID, 说明)
 # 这些项根因在他人模块，模块五只登记不复改，见 模块五_测试报告.md
-# 注意：2026-10-22 复查，队友已修复 BUG-01/02 的最小复现，
-# 但完整场景仍残留同类问题，故偏差保留并标注残留点。
+#
+# ── B-3 白名单复核（2026-10-23）：原 7 项逐条复验后收敛为 2 项 ──
+#   已可移除 5 项：S3-G1 第1轮(BUG-01)、S5-G3 第1轮(BUG-08)、S7-T1 第1轮(BUG-10)、
+#     S8-C1 第2轮 与 S8-P1 第1轮(BUG-11) —— 完整场景走查已通过，且经定向复验
+#     确认缺陷行为本身已修复（详见 模块五_测试报告.md「白名单复核结论」一节）。
+#     继续留着豁免只会掩盖真实回归，故删除。
+#   场景残留 2 项（下方保留）：最小复现已修（探针转绿），但真实场景仍被同源问题
+#     拦下，保留豁免并写明归属人 + 可照抄的复现文本，等对方合入后按 B-2 清零。
+#   探针误报 0 项。
 ALLOWED_DEVIATIONS = {
-    # 「加到」类变更动词已修复；「算了还是 65」这类口语修正表达仍无变更
-    # 动词覆盖，数量 65 与台账 80 被判冲突。
+    # 「加到」类变更动词已修复；「算了还是 65」这类口语修正表达仍无变更动词覆盖，
+    # 数量 65 与台账 80 被判冲突。定向复验：classify_order(raw_text="算了还是 65 吧")
+    # → CONFLICT（应为 OK）。
     ("S2-G2", 1): ("BUG-02", "上一轮写入成功后，本轮「算了还是 65」口语修正仍判冲突"
                              "——「加到」类已修复，口语减量/修正表达残留"),
-    # 占位/补全的冲突问题已修复；但「已存在实体 + 全缺关键字段」的消息
-    # 仍被判为 ok 更新而非 missing 追问，缺失闭环残留。
-    ("S3-G1", 0): ("BUG-01", "已存在实体但来单缺数量/交期时被当作 ok 更新，无缺失追问"
-                             "——冲突掩盖缺失已修，缺失追问残留"),
-    # —— 2026-10-22 全集扩充（22 组）后新发现的缺口，均归责他模块 ——
-    # 数量 5000 与台账 65 的比对先命中冲突分支，异常规则（数量暴涨/多打零）
-    # 未参与判定，导致「明显异常」被降级成「冲突」。
-    ("S5-G3", 0): ("BUG-08", "数量异常偏大（5000 vs 台账 65）未被判 abnormal，"
-                             "冲突判定抢先；异常规则缺「数量暴涨 N 倍」检测"),
-    # 台账交期是单值字段，无法表达「11-01 出 500 / 11-03 出 400」的分批口径，
-    # 第 3 轮回填第一批交期 11-01 与台账 11-03 打架。
-    ("S6-E2", 2): ("BUG-09", "分批交期不支持：台账无「分批/多批次交期」字段，"
-                             "第 3 轮回填第一批交期被判冲突"),
-    # validator 的 DATE_RE 只认 ^\d{4}-\d{2}-\d{2}$，「2026-10-21 17:00」
-    # 这类带时刻的期限被置空 → 恒判期限缺失。
-    ("S7-T1", 0): ("BUG-10", "任务期限不支持时刻：DATE_RE 只认 YYYY-MM-DD，"
-                             "「今天 17:00 前」这类口语期限被置空，恒判期限缺失"),
-    # 状态机只有 5 态（沟通中/待补充/待确认/已确认/已报价等），无「已取消/部分交付」。
-    # 卡片判 ok 但状态字段不动，取消/部分交付语义被静默吞掉 —— 卡片判定看不出来，
-    # 只有比对台账状态才能发现，故由 EXPECT_STATUS 专项校验捕获。
-    ("S8-C1", 1): ("BUG-11", "取消订单：状态未转「已取消」"),
-    ("S8-P1", 0): ("BUG-11", "部分交付：状态未转「部分交付」，"
-                             "已交付 120 / 余量 180 无字段承载"),
+    # 台账 delivery_batches 字段已加（探针绿），但冲突比对仍用单值 delivery_date，
+    # 分批回填第 1 批交期时先撞冲突，批次根本写不进去。
+    # 定向复验：台账交期 11-03 ←「分两批：11-01 出 500，11-03 出 400」
+    # → ⚠️ 冲突待确认，delivery_batches 仍为 None。
+    ("S6-E2", 2): ("BUG-09", "分批交期仍撞冲突：冲突比对用单值 delivery_date，"
+                             "未走批次有效交期，第 3 轮回填第一批交期被拦"),
+}
+
+# 场景残留项 → (归属人, 可照抄的复现文本, 期望 vs 实际)
+# 用途：走查输出第 [4] 节直接把「谁去修 + 怎么复现」打出来，避免口头描述走样。
+DEVIATION_OWNER = {
+    ("S2-G2", 1): (
+        "队长 A-1（contracts.CHANGE_VERBS 补「算了还是」等口语修正表达）",
+        "台账 李姐（瓯越五金贸易）/ DZ47-63 三相断路器 数量=80 → "
+        "来单「算了还是 65 个，客户临时砍了」",
+        "期望 ok（更新为 65），实际 conflict",
+    ),
+    ("S6-E2", 2): (
+        "队长 A-2（冲突比对改走批次有效交期）+ 队友D D-1（delivery_batches 落库）",
+        "台账 阿珍（鹿城鞋材）/ PU 皮鞋面 交期=2026-11-03 → "
+        "来单「分两批：11-01 出 500，11-03 出 400」",
+        "期望 ok（登记批次 11-01/500、11-03/400），"
+        "实际 conflict（交期 台账 11-03 ↔ 来单 11-01）",
+    ),
 }
 
 # 语义落库校验：(scene_id, round) -> (期望状态, BUG-ID)
@@ -227,10 +236,14 @@ def audit_whitelist(rows):
     except Exception:      # 缺陷看板不可用时跳过第 2/3 项
         known_ids, fixed_map = None, None
 
-    ok_keys = {(r[0], r[1]) for r in rows if r[5]}
+    # 注意列序：rows 每行是 (sid, scene_type, rnd, expect, actual, ok)，
+    # 轮次在第 3 列（r[2]），不是 r[1]（2026-10-23 修正：此前取错列导致
+    # 「失效项」永远查不出来，5 项过期豁免被静默保留）。
+    ok_keys = {(r[0], r[2]) for r in rows if r[5]}
     stale = sorted(k for k in ALLOWED_DEVIATIONS if k in ok_keys)
     orphan = []
     probe_green = []
+    no_owner = sorted(k for k in ALLOWED_DEVIATIONS if k not in DEVIATION_OWNER)
     if known_ids is not None:
         for k, (bug, _why) in ALLOWED_DEVIATIONS.items():
             if bug not in known_ids:
@@ -250,11 +263,11 @@ def audit_whitelist(rows):
                 pass
 
     print("\n[4] 白名单自检（ALLOWED_DEVIATIONS 维护体检）")
-    if not (stale or orphan or probe_green):
+    if not (stale or orphan or probe_green or no_owner):
         print("   ✅ 无失效项、无孤儿归责、无「探针已绿但场景仍偏差」项")
         return
     if stale:
-        print(f"   🧹 {len(stale)} 项已失效（本轮已通过，建议移除豁免，避免掩盖回归）：")
+        print(f"   🧹 {len(stale)} 项已失效（本轮已通过，必须移除豁免，否则掩盖回归）：")
         for sid, rnd in stale:
             print(f"      · {sid} 第{rnd+1}轮 → {ALLOWED_DEVIATIONS[(sid, rnd)][0]}")
     if orphan:
@@ -262,9 +275,18 @@ def audit_whitelist(rows):
         for (sid, rnd), bug in orphan:
             print(f"      · {sid} 第{rnd+1}轮 → {bug}")
     if probe_green:
-        print("   🔍 探针已转绿但完整场景仍偏差（最小复现已修、场景残留，提示归属人复核）：")
+        print("   🔍 探针已转绿但完整场景仍偏差（最小复现已修、场景残留）—— 归属人与复现：")
         for (sid, rnd), bug in probe_green:
             print(f"      · {sid} 第{rnd+1}轮 → {bug}")
+            if (sid, rnd) in DEVIATION_OWNER:
+                who, repro, want = DEVIATION_OWNER[(sid, rnd)]
+                print(f"        归属：{who}")
+                print(f"        复现：{repro}")
+                print(f"        判定：{want}")
+    if no_owner:
+        print("   📮 未登记归属人/复现文本的残留项（补齐后归属人才能照抄复现）：")
+        for sid, rnd in no_owner:
+            print(f"      · {sid} 第{rnd+1}轮 → {ALLOWED_DEVIATIONS[(sid, rnd)][0]}")
 
 
 if __name__ == "__main__":

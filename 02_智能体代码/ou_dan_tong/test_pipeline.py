@@ -20,6 +20,7 @@
 """
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -257,5 +258,21 @@ def test_pipeline():
 
 
 if __name__ == "__main__":
-    test_pipeline()
+    # Windows 上 store._save_one() 的原子写 `os.replace` 偶发 PermissionError
+    # （WinError 5，杀毒/索引服务占用旧文件；实测约 1/3 概率）。
+    # 这是**环境问题、不是断言失败**，也不在模块五职责内（store.py 属模块三/队友D），
+    # 故只在脚本侧重试并明确标注，避免「一键回归」被它误报成测试失败。
+    # 各 section 开头都会 store.reset()，重跑是幂等的。
+    for _attempt in range(1, 4):
+        try:
+            test_pipeline()
+            break
+        except PermissionError as _e:      # pragma: no cover - 依赖本机环境
+            if _attempt == 3:
+                print("\n❌ 环境问题：store 写盘被占用，重试 3 次仍失败，非断言失败")
+                print(f"   {_e}")
+                print("   归因：Windows 文件锁，位于 store.py 的 os.replace（模块三/队友D）")
+                sys.exit(2)
+            print(f"   ⚠️ store 写盘被占用（Windows 文件锁），重试第 {_attempt + 1} 次…")
+            time.sleep(0.05 * _attempt)
     print("\nALL TESTS PASSED ✅")

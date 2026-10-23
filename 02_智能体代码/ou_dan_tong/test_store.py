@@ -11,7 +11,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from store import (Store, normalize_status, can_transition, next_statuses,
-                   PLACEHOLDER_STATUS)
+                   PLACEHOLDER_STATUS, effective_delivery_date, _valid_batches,
+                   _invalid_batches)
 
 
 def _tmp_store():
@@ -184,11 +185,137 @@ def test_state_machine():
         shutil.rmtree(d, ignore_errors=True)
 
 
+# —— D-1 批次交期有效性解析 + D-3 模块级纯函数 + D-2 语义拆分 ——
+def test_batch_delivery():
+    s, d = _tmp_store()
+    try:
+        # 用例1：两批都已到期 → 有效交期=最晚批次日，计划排满且已交完
+        full = _order(qty=900, delivery_date=None,
+                      delivery_batches=[{"qty": 500, "date": "2026-11-01"},
+                                        {"qty": 400, "date": "2026-11-03"}])
+        full["order_id"] = "ORD-B1"
+        s.add_order(full)
+        assert s.effective_delivery_date(full) == "2026-11-03", full["delivery_batches"]
+        # D-3：模块级纯函数与 Store 方法结果一致，可直接被模块二 import 复用
+        assert effective_delivery_date(full) == "2026-11-03"
+        bs = s.batch_summary(full, as_of="2026-11-03")
+        assert bs["has_batches"] is True and bs["planned"] == 900, bs
+        assert bs["shipped"] == 900 and bs["total"] == 900, bs
+        assert bs["plan_complete"] is True and bs["done"] is True, bs
+        assert bs["last_date"] == "2026-11-03" and bs["next_date"] is None, bs
+
+        # 用例2：只交第一批（2026-11-01 已到，2026-11-03 未到）
+        # 修复旧 bug：旧版按「计划量>=qty 就 done=True」，未来批次也算交完
+        part = _order(qty=900, delivery_date=None,
+                      delivery_batches=[{"qty": 500, "date": "2026-11-01"},
+                                        {"qty": 400, "date": "2026-11-03"}])
+        part["order_id"] = "ORD-B2"
+        s.add_order(part)
+        bs = s.batch_summary(part, as_of="2026-11-02")
+        assert bs["planned"] == 900 and bs["shipped"] == 500, bs
+        assert bs["plan_complete"] is True, "计划已排满"
+        assert bs["done"] is False, "最晚批次日 11-03 未到，不得算交完"
+        assert bs["next_date"] == "2026-11-03", bs
+        # 到了 11-03 之后才算真交完
+        bs2 = s.batch_summary(part, as_of="2026-11-03")
+        assert bs2["done"] is True and bs2["next_date"] is None, bs2
+
+        # 用例3：无批次 → 回退 delivery_date，has_batches=False
+        plain = _order(qty=100, delivery_date="2026-11-05")
+        plain["order_id"] = "ORD-B3"
+        s.add_order(plain)
+        assert s.effective_delivery_date(plain) == "2026-11-05"
+        bs = s.batch_summary(plain)
+        assert bs["has_batches"] is False and bs["done"] is False, bs
+
+        # 用例4：全空 → None，done=False
+        empty = _order(qty=None, delivery_date=None)
+        empty["order_id"] = "ORD-B4"
+        s.add_order(empty)
+        assert s.effective_delivery_date(empty) is None
+        assert s.batch_summary(empty)["done"] is False
+
+        # 用例5：D-4/D-5 诊断——非法批次被跳过且可查原因
+        bad = _order(qty=300, delivery_date=None,
+                     delivery_batches=[{"qty": 100, "date": "2026-11-01"},
+                                       {"qty": "一百", "date": "2026-11-02"},   # qty 非法
+                                       {"qty": 200, "date": "2026-13-99"},      # 日期不存在
+                                       "不是对象"])
+        bad["order_id"] = "ORD-B5"
+        s.add_order(bad)
+        assert [b["qty"] for b in _valid_batches(bad)] == [100], "只留合法条目"
+        invalid = _invalid_batches(bad)
+        assert len(invalid) == 3, invalid
+        assert any("qty" in r for _, _, r in invalid), invalid
+        assert any("真实存在的日期" in r for _, _, r in invalid), invalid
+        print("✓ D-1/D-3/D-2 批次语义：模块级纯函数、planned/shipped/done 拆分、非法批次可诊断")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+# —— D-2 一致性校验覆盖批次字段 ——
+def test_integrity_batches():
+    s, d = _tmp_store()
+    try:
+        s.orders = [
+            # 类型1：批次和 900 ≠ delivered_qty 500
+            {**_order(qty=900), "order_id": "ORD-X1", "status": "生产中",
+             "delivered_qty": 500, "remain_qty": 400,
+             "delivery_batches": [{"qty": 400, "date": "2026-11-01"},
+                                  {"qty": 500, "date": "2026-11-03"}]},
+            # 类型2：delivered 500 + remain 100 ≠ qty 900
+            {**_order(qty=900), "order_id": "ORD-X2", "status": "生产中",
+             "delivered_qty": 500, "remain_qty": 100,
+             "delivery_batches": [{"qty": 500, "date": "2026-11-01"}]},
+            # 类型3：待补充占位单带了 delivery_batches
+            {**_order(), "order_id": "ORD-X3", "status": "待补充",
+             "delivery_batches": [{"qty": 10, "date": "2026-11-01"}]},
+        ]
+        issues = s.integrity_check()
+        by_id = {}
+        for i in issues:
+            by_id.setdefault(i["id"], []).append(i["issue"])
+        assert any("≠ delivered_qty" in m for m in by_id.get("ORD-X1", [])), by_id
+        assert any("remain_qty" in m and "≠" in m for m in by_id.get("ORD-X2", [])), by_id
+        assert any("待补充" in m for m in by_id.get("ORD-X3", [])), by_id
+        # 定位粒度：三类问题都带具体 order_id（by_id 键即单号）
+
+        # repair：给出明确标记「需人工确认」，不得静默篡改数据
+        actions, remaining = s.repair()
+        assert all(o.get("delivery_batches") for o in s.orders), "repair 不得删除批次数据"
+        assert s.orders[0]["delivered_qty"] == 500, "repair 不得改 delivered_qty"
+        assert s.orders[1]["remain_qty"] == 100, "repair 不得改 remain_qty"
+        assert s.orders[2]["status"] == "待补充", "repair 不得改占位单状态"
+        assert all(o["flags"].get("batch_inconsistent") for o in s.orders), "应打 batch_inconsistent 标记"
+        batch_remaining = [r for r in remaining if "批次" in r]
+        assert len(batch_remaining) == 3 and all("人工确认" in r for r in batch_remaining), remaining
+
+        # D-1 修复验收：标记必须真实落盘（orders.json 文件内容里能读到 batch_inconsistent），
+        # 重启后仍在 —— 旧版只进内存，重启即丢
+        with open(os.path.join(d, "orders.json"), encoding="utf-8") as f:
+            on_disk = f.read()
+        assert "batch_inconsistent" in on_disk, "batch_inconsistent 标记未落盘"
+        s2 = Store(d)
+        assert all(o["flags"].get("batch_inconsistent") for o in s2.orders), "重启后标记丢失"
+
+        # D-6：仅缺 delivered_qty 降为 warn（不再 error）；值对不上仍是 error
+        s.orders = [{**_order(qty=100), "order_id": "ORD-W1", "status": "生产中",
+                     "delivery_batches": [{"qty": 100, "date": "2026-11-01"}]}]
+        levels = [(i["level"], i["issue"]) for i in s.integrity_check()
+                  if i["id"] == "ORD-W1" and "delivered_qty" in i["issue"]]
+        assert levels and all(lv == "warn" for lv, _ in levels), levels
+        print("✓ D-2 一致性校验覆盖批次字段：3 类坏数据检出并定位到单号，repair 标记落盘可重启恢复")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_model()
     test_latest_state()
     test_persistence()
     test_integrity()
     test_state_machine()
+    test_batch_delivery()
+    test_integrity_batches()
     print("-" * 46)
     print("模块三 ALL TESTS PASSED ✅")

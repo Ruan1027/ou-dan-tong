@@ -128,14 +128,19 @@ def apply_change(existing: dict, extracted: dict, now: str = None):
 # ---------------------------------------------------------------------------
 # 模块二核心：缺失 / 冲突 / 异常 判定（契约 4）
 # ---------------------------------------------------------------------------
-def classify_order(o: dict, existing: dict = None, order_date: str = None) -> ValidationResult:
+def classify_order(o: dict, existing: dict = None, order_date: str = None,
+                   raw_text: str = None) -> ValidationResult:
     """对一条抽取订单做四级判定，返回 ValidationResult。
 
     优先级：异常(abnormal) > 冲突(conflict) > 缺失(missing) > 正常(ok)。
     order_date：下单日期(YYYY-MM-DD)，用于日期倒挂判定；不传则跳过该项。
+    raw_text：原始聊天文本；变更动词判定同时看 source_excerpt 与原始消息，
+             避免 LLM 摘录没带上「改成」等动词时把正常更新误判为冲突（模块二）。
     """
     customer = (o.get("customer") or "").strip()
     product = (o.get("product") or "").strip()
+    # 变更意图：原文或摘录里出现变更动词即视为「主动更新」
+    _verb_text = (o.get("source_excerpt") or "") + " " + (raw_text or "")
 
     # 0. 主键缺失：无法建单
     if not customer or not product:
@@ -163,7 +168,7 @@ def classify_order(o: dict, existing: dict = None, order_date: str = None) -> Va
             )
         # BUG-08 修复：数量暴涨/骤降（疑似多打零/笔误）优先判异常，而非降级为冲突。
         # 仅在无明确变更动词时拦截，避免正常「加到 5000」被误伤。
-        if existing is not None and not _has_change_verb(o.get("source_excerpt", "") or o.get("raw", "")):
+        if existing is not None and not _has_change_verb(_verb_text):
             eq = existing.get("qty")
             if _meaningful(eq) and _meaningful(qty):
                 eqi, nqi = _to_int(eq), _to_int(qty)
@@ -193,7 +198,7 @@ def classify_order(o: dict, existing: dict = None, order_date: str = None) -> Va
     # 修复 BUG-01：占位单（status=待补充）补全时直接转正，不进冲突比对；
     # 冲突比对收敛为数值类字段（移除 status，状态流转走状态机而非冲突判定）。
     if existing and existing.get("status") != "待补充":
-        verb = _has_change_verb(o.get("source_excerpt", "") or o.get("raw", ""))
+        verb = _has_change_verb(_verb_text)
         contradictions = []
         for f in ("qty", "unit_price", "delivery_date"):
             ev = existing.get(f)
@@ -225,7 +230,7 @@ def classify_order(o: dict, existing: dict = None, order_date: str = None) -> Va
     # 3.5 BUG-01' 修复：命中既有实体但数量/交期全空且无变更意图
     # → 视为补充确认追问，而非「无变化」（避免"已更新"误导）。
     if existing is not None:
-        verb = _has_change_verb(o.get("source_excerpt", "") or o.get("raw", ""))
+        verb = _has_change_verb(_verb_text)
         if not verb and not _meaningful(o.get("qty")) and not _meaningful(o.get("delivery_date")):
             return ValidationResult(
                 CheckStatus.MISSING,

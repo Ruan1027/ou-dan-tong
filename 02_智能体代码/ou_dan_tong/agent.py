@@ -20,7 +20,8 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
     for o in orders:
         existing = store.find_active(o["customer"], o["product"])
         # —— 模块二核心：缺失 / 冲突 / 异常 四级判定 ——
-        res = classify_order(o, existing, order_date=order_date)
+        # raw_text 传入：变更动词判定同时看原文，避免「改成/更新」被漏判为冲突
+        res = classify_order(o, existing, order_date=order_date, raw_text=chat_text)
         if res.status == CheckStatus.ABNORMAL:
             cards.append("⛔ 异常拦截：" + res.message)
             continue

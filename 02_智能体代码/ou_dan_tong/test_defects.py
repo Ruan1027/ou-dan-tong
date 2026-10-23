@@ -151,9 +151,15 @@ def probe_bug09():
                                               excerpt="分两批：11-01 出 500，11-03 出 400")],
                          now=NOW)
     r = _rec(s, C_LW)
-    has_batches = any(k in str(r or {}) for k in ("batches", "batch", "split"))
+    # C-13 修正判据：原写法 `any(k in str(r) for k in ("batches","batch","split"))` 查的是
+    # 字段【名】——store 的台账号 schema 恒含 delivery_batches 键（值为 None 也命中 "batch"），
+    # 于是无论批次有没有真正解析入库，探针都返回已修复 → BUG-09 长期假绿。
+    # 改为查【值】：必须是「含 date 与 qty 的非空列表」才算修好。
+    batches = (r or {}).get("delivery_batches") or []
+    has_batches = bool(batches) and all(
+        isinstance(b, dict) and b.get("date") and b.get("qty") is not None for b in batches)
     line = card.splitlines()[0] if card.strip() else "(空卡片)"
-    return has_batches, f"台账含分批字段={has_batches} ｜ 交期={r and r.get('delivery_date')} ｜ {line[:50]}"
+    return has_batches, f"台账批次={batches} ｜ 交期={r and r.get('delivery_date')} ｜ {line[:50]}"
 
 
 def probe_bug10():

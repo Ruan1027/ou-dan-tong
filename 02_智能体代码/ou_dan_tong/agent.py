@@ -1,11 +1,12 @@
 """编排层：解析入库 / 查询 / 简报。"""
 import datetime
+import re
 
 from llm import LLM
 from prompts import card_text, query_text, briefing_text, STATUS_ORDER
 from store import Store
 from validator import validate_extraction, apply_change, classify_order, classify_task
-from contracts import CheckStatus
+from contracts import CheckStatus, CHANGE_VERBS
 from extractor import extract
 
 
@@ -470,6 +471,23 @@ _QUERY_MARKERS = ("到哪", "状态", "查", "进度", "什么时候交", "几�
 _BRIEFING_MARKERS = ("简报", "今天情况", "今日", "整体情况", "汇总", "今天有哪些")
 
 
+# 订单/改单意图优先判定：含变更动词或明确的数量/价格数值主张时，即便夹带
+# 「那单/的单」等查询词，也按群聊指令解析，而非当成查单问句。
+# 解决模块一真实话术（如「法兰 DN80 那单单价你按 18 算」）被误判为查询的问题。
+_ORDER_QTY_RE = re.compile(r"\d+\s*(个|台|件|双|米|批|套|只|根|张|箱|副|把)")
+_ORDER_PRICE_RE = re.compile(r"(单价|价格|报价|单价按|元|块)\D*\d")
+
+
+def _looks_like_order(t: str) -> bool:
+    if any(v in t for v in CHANGE_VERBS):
+        return True
+    if _ORDER_QTY_RE.search(t):
+        return True
+    if _ORDER_PRICE_RE.search(t):
+        return True
+    return False
+
+
 def handle_message(text, store: Store, llm: LLM = None, mock=None):
     """统一入口：贴群聊→提取；问句→查单；简报词→汇总。
     模块四·3：query/briefing 的输出经 _colloquialize() 口语化（有 LLM 时生效，无则保底原文）。
@@ -480,6 +498,10 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None):
                 "reply": "把业务群聊粘贴给我，或问我「XX 那单到哪了」「出今日简报」。"}
     if any(k in t for k in _BRIEFING_MARKERS):
         return {"mode": "briefing", "reply": _colloquialize(briefing(store, llm), llm)}
+    # 订单/改单意图优先：含变更动词或数量/价格数值主张时，即使带「那单」也按群聊解析
+    if _looks_like_order(t):
+        card, _ = parse_chat(t, store, llm=llm, mock=mock)
+        return {"mode": "parse", "reply": card}
     if any(k in t for k in _QUERY_MARKERS):
         return {"mode": "query", "reply": _colloquialize(query(t, store, llm), llm)}
     card, _ = parse_chat(t, store, llm=llm, mock=mock)

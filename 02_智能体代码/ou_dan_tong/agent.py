@@ -1,5 +1,6 @@
 """编排层：解析入库 / 查询 / 简报。"""
 import datetime
+import os
 import re
 
 from llm import LLM
@@ -10,8 +11,9 @@ from contracts import CheckStatus, CHANGE_VERBS
 from extractor import extract
 
 
-def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = None):
-    raw = extract(chat_text, llm, mock)
+def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = None,
+               sender: str = None):
+    raw = extract(chat_text, llm, mock, sender=sender)
     orders, tasks, skipped = validate_extraction(raw)
     out = []
     cards = []
@@ -401,6 +403,9 @@ def briefing(store: Store, llm: LLM = None):
 
 
 # ---- 模块四·3：口语化应答 ----
+# 总开关，默认关闭：模板话术本身已是人话，再经一次 LLM 只增加 8~9s 延迟并改写固定措辞。
+# 需要演示"口语播报"能力时设 OU_COLLOQUIAL=1。
+_COLLOQUIAL_ON = os.getenv("OU_COLLOQUIAL", "").lower() in ("1", "true", "yes", "on")
 _COLLOQUIAL_SYSTEM = (
     "你是「瓯单通」订单协同助手，负责把机器生成的查询/简报结果改写成人话口语播报。"
     "严格规则（违反即失败）："
@@ -435,13 +440,17 @@ def _check_facts(raw: str, rewritten: str) -> bool:
 
 
 def _colloquialize(raw_text: str, llm: LLM = None) -> str:
-    """模块四·3：把机器化的查询/简报输出改写成口语播报体。
+    """模块四·3：把机器化的查询/简报输出改写成口语播报体（**默认关闭**）。
 
-    - llm 为 None 或无 key 时，返回原文本（保底，不影响现有功能）
-    - LLM 调用失败时，返回原文本（绝不让 LLM 故障拖垮查询）
-    - 防幻觉（P0-3）：改写后做事实保全校验（数字/日期/状态不得增删），失真则回退原文
+    默认走模板直出，原因（实测数据支撑）：
+    - 模板本身已经是人话（card_text / query_text / briefing_text），再经一次 LLM 改写
+      会多花 8~9 秒，且会把「未命中具体客户/产品/状态」这类固定话术换掉，
+      破坏「问题—答案一一对应」，评审追问时对不上模块二。
+    - 需要展示口语化能力时设 OU_COLLOQUIAL=1 开启。
+
+    开启后仍有防幻觉：改写结果做事实保全校验（数字/日期/状态不得增删），失真则回退原文。
     """
-    if llm is None:
+    if llm is None or not _COLLOQUIAL_ON:
         return raw_text
     if not raw_text or not raw_text.strip():
         return raw_text
@@ -488,9 +497,11 @@ def _looks_like_order(t: str) -> bool:
     return False
 
 
-def handle_message(text, store: Store, llm: LLM = None, mock=None):
+def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str = None):
     """统一入口：贴群聊→提取；问句→查单；简报词→汇总。
-    模块四·3：query/briefing 的输出经 _colloquialize() 口语化（有 LLM 时生效，无则保底原文）。
+    sender：发这条消息的客户方称谓（真实微信群的发言人昵称），缺了它客户自报类
+            消息会被抽成「无客户」而丢弃，故网页端必须一并传入。
+    模块四·3：query/briefing 的输出经 _colloquialize() 口语化（需显式开启，默认模板直出）。
     """
     t = (text or "").strip()
     if not t:
@@ -500,7 +511,7 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None):
         return {"mode": "briefing", "reply": _colloquialize(briefing(store, llm), llm)}
     # 订单/改单意图优先：含变更动词或数量/价格数值主张时，即使带「那单」也按群聊解析
     if _looks_like_order(t):
-        card, _ = parse_chat(t, store, llm=llm, mock=mock)
+        card, _ = parse_chat(t, store, llm=llm, mock=mock, sender=sender)
         return {"mode": "parse", "reply": card}
     if any(k in t for k in _QUERY_MARKERS):
         return {"mode": "query", "reply": _colloquialize(query(t, store, llm), llm)}

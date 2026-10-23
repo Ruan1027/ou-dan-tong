@@ -15,6 +15,11 @@ from store import Store
 from agent import parse_chat, query, briefing
 from sim_chats import SCENARIO1_MOCK, SCENARIO3_MOCK
 
+# 本套件专测「模块四·3 口语化改写」能力，必须显式开启开关。
+# 生产默认是关闭的（模板直出，避免多一次 LLM 拖慢 8~9s 并改写固定话术）。
+import agent as _agent_mod
+_agent_mod._COLLOQUIAL_ON = True
+
 
 def test_module4():
     store = Store()

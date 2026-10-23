@@ -1,5 +1,6 @@
 """极简 OpenAI 兼容 LLM 调用封装，仅用标准库，零依赖。"""
 import json
+import os
 import time
 import urllib.request
 import urllib.error
@@ -11,7 +12,11 @@ from config import (
 
 # 偶发网关抖动（500/502/503/504/超时）自动重试：演示时不能因为一次抖动就空回复
 _RETRYABLE = (500, 502, 503, 504)
-_RETRIES = 3
+# 词元天下网关实测单次 8~45s（远慢于 DeepSeek 官方 2~5s），重试上限必须收敛：
+# 原 3 次 × 60s timeout = 最坏 184s，用户观感等同卡死。改 2 次 × 50s = 最坏 101s，
+# 且 50s 足以容纳实测 44s 的成功请求。
+_RETRIES = int(os.getenv("OU_LLM_RETRIES", "2"))
+_TIMEOUT = int(os.getenv("OU_LLM_TIMEOUT", "50"))
 
 
 class LLM:
@@ -46,7 +51,7 @@ class LLM:
         last_err = None
         for attempt in range(_RETRIES):
             try:
-                with urllib.request.urlopen(req, timeout=60) as resp:
+                with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                 return data["choices"][0]["message"]["content"]
             except urllib.error.HTTPError as e:
@@ -59,5 +64,5 @@ class LLM:
                 last_err = e
                 if attempt == _RETRIES - 1:
                     raise
-            time.sleep(1.5 * (attempt + 1))  # 1.5s / 3s 退避
+            time.sleep(1.0 * (attempt + 1))  # 1s 退避（网关慢，退避不宜再拉长）
         raise last_err

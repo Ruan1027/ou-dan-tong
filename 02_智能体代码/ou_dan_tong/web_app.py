@@ -23,17 +23,32 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 INDEX = os.path.join(ROOT, "static", "index.html")
 
 _store = Store()
-# 模块四·3：有 key 时创建 LLM 实例，用于查询/简报口语化
-_llm = LLM() if (os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")) else None
+# 模块四·3：根据配置选择 provider。
+#   - 任意 OpenAI 兼容端点（算力平台常见）：配 OPENAI_BASE_URL + OPENAI_API_KEY 即走 openai provider
+#   - DeepSeek 官方：配 DEEPSEEK_API_KEY 即走 deepseek provider
+if os.getenv("OPENAI_BASE_URL") and os.getenv("OPENAI_API_KEY"):
+    _llm = LLM("openai")
+    _MODEL_NAME = os.getenv("OPENAI_MODEL", "openai-model")
+elif os.getenv("DEEPSEEK_API_KEY"):
+    _llm = LLM("deepseek")
+    _MODEL_NAME = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+else:
+    _llm = None
+    _MODEL_NAME = ""
 # OU_DEMO_MODE=1 时强制用 mock 数据（seed + 预置抽取），但 LLM 口语化照常——演示用
 _DEMO_MODE = os.getenv("OU_DEMO_MODE", "").lower() in ("1", "true", "yes", "on")
-USE_MOCK = (not (os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"))) or _DEMO_MODE
+USE_MOCK = (not _llm) or _DEMO_MODE
 MODE_LABEL = "模拟模式（未配置 API Key，演示用预置数据）" if USE_MOCK and not _llm \
     else f"演示模式（Mock 数据 + LLM 口语化）" if _DEMO_MODE and _llm \
-    else f"真实模式（{os.getenv('DEEPSEEK_MODEL', os.getenv('OPENAI_MODEL', 'LLM'))}）" if _llm \
+    else f"真实模式（{_MODEL_NAME}）" if _llm \
     else "模拟模式（未配置 API Key，演示用预置数据）"
 if USE_MOCK:
     # 演示预置在途单：使冲突/更新/异常场景能命中 existing（模块二可见）
+    _store.reset()
+    handle_message("__seed__", _store, llm=None, mock=SEED_MOCK)
+else:
+    # 真实模式同样 reset + seed 演示在途单（mock 直接入库，不走 LLM）：
+    # 保证冲突/更新/查单/简报开箱即有演示对象，与模拟模式体验一致。
     _store.reset()
     handle_message("__seed__", _store, llm=None, mock=SEED_MOCK)
 _LOCK = threading.Lock()
@@ -71,7 +86,11 @@ def _pick_mock(scenario, text):
 def do_chat(text, scenario=None):
     with _LOCK:
         mock = _pick_mock(scenario, text) if USE_MOCK else None
-        result = handle_message(text, _store, llm=_llm, mock=mock)
+        try:
+            result = handle_message(text, _store, llm=_llm, mock=mock)
+        except Exception as e:  # LLM 网关抖动等：返回友好提示，不让请求空响应
+            result = {"mode": "error",
+                      "reply": f"⚠️ 智能体处理暂时失败（{type(e).__name__}），请稍后重试。"}
     result["ledger"] = ledger_state()
     # 模拟模式提示：未接入 API Key 时输入不真实解析、展示预置演示数据；
     # 配置 DEEPSEEK_API_KEY 后进入真实模式，此提示自动隐藏
@@ -119,8 +138,8 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/reset":
             with _LOCK:
                 _store.reset()
-                if USE_MOCK:
-                    handle_message("__seed__", _store, llm=None, mock=SEED_MOCK)
+                # 两种模式都 re-seed 演示在途单，保证重置后冲突/更新/查单仍有演示对象
+                handle_message("__seed__", _store, llm=None, mock=SEED_MOCK)
             self._json(ledger_state())
         else:
             self._send(404, "Not Found")

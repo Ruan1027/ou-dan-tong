@@ -31,7 +31,8 @@ MISSING_TRAP_MOCK = [
 ]
 
 # —— 网页体验增强：五类场景示例（覆盖模块二 缺失/冲突/异常/更新/新建）——
-# 演示启动时会先 seed 以下在途单，使冲突/更新/异常场景能命中 existing（模块二可见）。
+# 演示启动时会先 seed 以下在途单，使冲突/更新/异常场景能命中 existing（模块二可见），
+# 并含「万博机电 TND-3」以便平台汇总页「查万博那单」能命中真实结果。
 SEED_MOCK = [
     {"type": "order", "customer": "温州机电", "product": "法兰盘", "spec": "DN50",
      "qty": 300, "unit_price": "8.0", "delivery_date": "2026-11-25", "status_hint": "沟通中",
@@ -39,6 +40,9 @@ SEED_MOCK = [
     {"type": "order", "customer": "王工（XX电气）", "product": "NMX-60 断路器外壳", "spec": "",
      "qty": 5000, "unit_price": "3.2", "delivery_date": "2026-11-20", "status_hint": "已报价",
      "sample_flag": "打样", "source_excerpt": "王工 NMX-60 外壳 5000个 单价3.2 11月20号交"},
+    {"type": "order", "customer": "万博机电", "product": "TND-3 稳压器", "spec": "",
+     "qty": 200, "unit_price": "待报价", "delivery_date": "2026-10-28", "status_hint": "生产中",
+     "sample_flag": "大货", "source_excerpt": "万博机电 TND-3 稳压器 200台 下周排产 28号前出货"},
 ]
 
 # 新建：全新客户+产品，字段齐全 → 正常建单

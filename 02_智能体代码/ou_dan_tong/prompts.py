@@ -7,7 +7,7 @@ EXTRACTION_SYSTEM = """你是制造企业订单要素提取器。从聊天记录
  "intent": "new | update | append | null",
  "customer": "客户称谓（公司名，或消息中对客户的称呼如「王工」；结合上下文归属，完全无线索才填 null）", "product": "", "spec": "", "qty": null,
  "unit_price": "可含'待报价'", "delivery_date": "YYYY-MM-DD|null",
- "sample_flag": "打样|大货|无", "status_hint": "沟通中|已报价|已确认|生产中|部分交付|已交付|已取消|null",
+ "sample_flag": "打样|大货|无", "status_hint": "沟通中|已确认|生产中|部分交付|已交付|已取消|null",
  "task_content": "", "owner": "", "task_deadline": "YYYY-MM-DD|null",
  "source_excerpt": "支撑本结论的原文片段，≤100字"
 }]
@@ -27,7 +27,14 @@ EXTRACTION_SYSTEM = """你是制造企业订单要素提取器。从聊天记录
      表示在**原来那单之外再要一笔** → intent 填 **append**（后台会开一条追加单挂到原单下）；
    - 客户说「改成 / 加到 / 调整为 / 算了还是」等，表示**修改原来那单** → intent 填 **update**；
    - 首次提到的订单 → intent 填 **new**。
-9. 客户提到「再…」但没有明说是改原单时，优先判 append，不要判 update。"""
+9. 客户提到「再…」但没有明说是改原单时，优先判 append，不要判 update。
+   但有一个明确例外：**「跟上次一起发 / 并到原来那单里 / 跟原来那单一起」= 在原单上加量**，
+   intent 填 update，不是追加。追加的标志是「另外排一批 / 分开走 / 单独一单」。
+   例：「再排一批 300 个的，跟原来那单分开走」→ append；
+       「再给我加 200 个，跟上次一起发」→ update（原单数量改成 5200）。
+10. **分批交货时 qty 填总数量**（各批之和），不要把某一批的数量当成订单总数量。
+   例：「900 个，分两批：11-01 出 500，11-03 出 400」→ qty=900，delivery_date=2026-11-03
+   （全部交完的日期），source_excerpt 保留完整的批次原话。"""
 
 # 发送者身份规则：真实微信群每条消息都带发言人昵称，网页端必须一并传入。
 # 缺了它，像「小陈，DZ47 那个加到 80 个」这种客户自报场景会被判成「无客户」而整条丢弃。
@@ -46,15 +53,42 @@ BRIEFING_SYSTEM = """把以下聚合数据汇总成一份简洁的今日订单�
 # 状态机单一真相源：直接复用 contracts.py（避免两份定义漂移，见 BUG-11 修复）
 # 交期同理：分批单的「该交付日」= 最晚批次日，统一走 contracts.effective_delivery_date
 from contracts import (STATUS_ORDER, STATUS_RANK, TERMINAL_STATUSES,  # noqa: E402,F401
-                       effective_delivery_date)
+                       effective_delivery_date, valid_batches, missing_dims)
+
+
+def batch_brief(order: dict) -> str:
+    """分批交期的人类可读摘要（C-13）：「分 2 批：11-01×500 / 11-03×400」。
+
+    台账 / 卡片 / 查询都必须带上这句 —— 只显示总数和最终日期，
+    等于客户说的「分两批」根本没被记录，屏上完全看不出交付节奏。
+    """
+    bs = valid_batches(order)
+    if not bs:
+        return ""
+    return "分 %d 批：%s" % (len(bs), " / ".join(f"{b['date'][5:]}×{b['qty']}" for b in bs))
+
+
+def _status_tail(order: dict) -> str:
+    """状态后缀（C-13 产品口径）：沟通中必须带出「还差哪个维度没定」。
+
+    「沟通中」= 数/期/价至少一个没定 —— 只显示「沟通中」三个字，
+    等于把「缺什么」藏起来了，用户没法据此补信息。
+    """
+    if order.get("status") != "沟通中":
+        return ""
+    dims = missing_dims(order)
+    return ("（" + "、".join(dims) + "）") if dims else ""
 
 
 def card_text(order: dict, tasks: list, is_new: bool) -> str:
     tag = "已登记新订单" if is_new else "已更新订单"
+    _note = batch_brief(order)
     lines = [
         f"✅ {tag} {order['order_id']}",
         f"📦 客户：{order['customer']}｜产品：{order['product']} {order.get('spec','')} ×{order.get('qty','?')}",
-        f"💰 单价 {order.get('unit_price','待报价')} ｜ 📅 交期 {effective_delivery_date(order) or '待定'} ｜ 状态：{order.get('status')}",
+        f"💰 单价 {order.get('unit_price','待报价')} ｜ 📅 交期 {effective_delivery_date(order) or '待定'}"
+        + (f"（{_note}）" if _note else "")
+        + f" ｜ 状态：{order.get('status')}{_status_tail(order)}",
     ]
     if tasks:
         t = "；".join(f"{x['content']}" + (f"（{x['owner']}）" if x.get('owner') else "（待认领）") for x in tasks)
@@ -73,10 +107,13 @@ def append_card_text(order: dict) -> str:
     pid = order.get("parent_order_id") or ""
     head = f"📥 已登记追加单 {order['order_id']}"
     head += f"（追加自 {pid}，原单不改动）" if pid else ""
+    _note = batch_brief(order)
     lines = [
         head,
         f"📦 客户：{order['customer']}｜产品：{order['product']} {order.get('spec','')} ×{order.get('qty','?')}",
-        f"💰 单价 {order.get('unit_price','待报价')} ｜ 📅 交期 {effective_delivery_date(order) or '待定'} ｜ 状态：{order.get('status')}",
+        f"💰 单价 {order.get('unit_price','待报价')} ｜ 📅 交期 {effective_delivery_date(order) or '待定'}"
+        + (f"（{_note}）" if _note else "")
+        + f" ｜ 状态：{order.get('status')}{_status_tail(order)}",
     ]
     if order.get("source_excerpt"):
         lines.append(f"📎 依据：\"{order['source_excerpt']}\"")
@@ -84,8 +121,11 @@ def append_card_text(order: dict) -> str:
 
 
 def query_text(order: dict, suggestion: str = "") -> str:
+    _note = batch_brief(order)
     base = (f"{order['customer']}的{order['product']} {order.get('spec','')} ×{order.get('qty','?')}，"
-            f"当前状态{order.get('status')}，预计{effective_delivery_date(order) or '待定'}交付。")
+            f"当前状态{order.get('status')}{_status_tail(order)}，"
+            f"预计{effective_delivery_date(order) or '待定'}交付"
+            + (f"（{_note}）" if _note else "") + "。")
     ev = f"📎 依据：\"{order.get('source_excerpt','')}\"。" if order.get("source_excerpt") else ""
     return base + ev + (suggestion and f" {suggestion}")
 
@@ -94,7 +134,7 @@ def briefing_text(stats: dict) -> str:
     today = stats.get("date", "")
     lines = [f"📋 {today} 订单协同简报",
              f"🆕 新增订单：{stats['new']} 笔（{stats.get('new_customers','')}）",
-             f"💰 待报价：{stats['pending_quote']} 笔（最急：{stats.get('most_urgent','无')}）",
+             f"💬 沟通中（未定价）：{stats['pending_quote']} 笔（最急：{stats.get('most_urgent','无')}）",
              f"⏰ 临期交付：{stats['due_soon']} 笔（{stats.get('due_list','')}）",
              f"❗ 逾期任务：{stats['overdue']} 项（{stats.get('overdue_list','')}）"]
     return "\n".join(lines)

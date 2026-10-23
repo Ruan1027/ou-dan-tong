@@ -189,6 +189,18 @@ def probe_bug12():
     return has_output, f"卡片非空={has_output} ｜ 卡片={card[:40]!r} ｜ 入库任务={len(meta.get('tasks', []))}"
 
 
+def probe_bug13():
+    """任务幂等缺失：同一段消息二次导入，订单去重（2→2）但任务重复入库（1→2），
+    简报任务列表随之膨胀重复 —— 2026-10-23 模块五优化轮由 test_pipeline 尾段简报暴露。"""
+    s = fresh()
+    parse_chat("x", s, mock=SCENARIO1_MOCK, now=NOW)
+    t1 = len(s.tasks)
+    parse_chat("x", s, mock=SCENARIO1_MOCK, now=NOW)
+    t2 = len(s.tasks)
+    ids = [t.get("task_id") for t in s.tasks]
+    return (t1 == t2), f"首次导入 {t1} 任务，再次导入 {t2} 任务（应相等）｜ 任务号={ids}"
+
+
 def probe_regression_mock_dup():
     """回归验证：网页模拟模式「Mock 重复入库」（历史缺陷，5c507b7 已修）。"""
     s = fresh()
@@ -286,6 +298,14 @@ DEFECTS = [
          fix="orders 为空而 tasks 非空时，单独生成任务卡片（✅ 已登记任务：…负责人/期限），"
              "保证每条任务都有可见回执。",
          probe=probe_bug12),
+    dict(id="BUG-13", severity="🟠 中", title="任务幂等缺失：同一消息二次导入，任务重复入库",
+         owner="模块三 store.add_task / 模块四 agent.py parse_chat", who="队友D / 队友C",
+         where="订单侧有主键去重（同单二次导入不新增，REG-01 已把关），任务侧无任何去重："
+               "同一段聊天二次导入，订单 2→2 不变，任务 1→2 且每次新发 TSK 号；"
+               "简报「逾期任务/待办」列表随之重复膨胀（test_pipeline 尾段简报实测可见）。",
+         fix="建议：add_task 前按 (content, owner, deadline, order_id) 判重，"
+             "命中既有任务时跳过或转为更新，与订单幂等口径对齐。",
+         probe=probe_bug13),
 ]
 
 REGRESSIONS = [

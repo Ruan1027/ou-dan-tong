@@ -6,8 +6,10 @@
       只能经 confirm_update 人工确认后写入；状态流转受状态机约束
 - 三·3 持久化与读写：原子写盘、损坏文件自动备份兜底、get/update/query 增改查
 - 三·4 一致性校验与修复：integrity_check + repair（重复ID/缺失字段/非法状态/孤儿引用）
-- 三·5 进度状态机：基于 contracts.STATUS_ORDER（沟通中→已报价→已确认→生产中→已交付）
-      单向流转，禁止状态回退（force 需人工显式调用）
+- 三·5 进度状态机：基于 contracts.STATUS_ORDER（沟通中→已确认→生产中→部分交付→已交付）
+      单向流转，禁止状态回退（force 需人工显式调用）。
+      「已报价」已废弃：报价只是把价定了，体现为沟通中的「未定价」维度消失，
+      旧值经 STATUS_ALIASES 归一为「沟通中」。
 
 铁律：契约字段以 contracts.py 为准，本文件只加实现、不改契约；既有方法签名
 （add_order / update_order / find_active / query_* 等）保持向下兼容，模块二/四/五
@@ -27,6 +29,9 @@ STATUS_ALIASES = {
     "待确认": "已确认",
     "已发货": "已交付",
     "已完成": "已交付",
+    # 「已报价」状态已废弃（2026-10-23 产品口径：报价只是把价定了，不构成独立状态，
+    # 体现为「未定价」维度消失）。旧台账数据/旧话术里的「已报价」归一为「沟通中」。
+    "已报价": "沟通中",
 }
 
 # 冲突/异常人工确认前，禁止自动覆盖的字段（模块三·2）
@@ -560,8 +565,28 @@ class Store:
         self.save()
         return order
 
+    @staticmethod
+    def _task_key(t: dict):
+        """任务幂等键（BUG-13）：内容 + 负责人 + 期限 + 原文依据。
+
+        为什么**不用 order_id**：任务的订单关联取自「本批次第一条订单」，
+        同一段聊天重复导入时本批可能只命中部分订单，order_id 会漂移
+        （实测同一条任务先挂 ORD-01、再导入变 ORD-02）→ 键一变就绕过去重、又建一条。
+        用 source_excerpt 更稳：它标识「这句话产生的这个任务」，与批次命中情况无关。
+        """
+        return ((t.get("content") or "").strip(),
+                (t.get("owner") or "").strip(),
+                str(t.get("deadline") or ""),
+                (t.get("source_excerpt") or "").strip())
+
     def add_task(self, task: dict):
         self._norm_task(task)
+        key = self._task_key(task)
+        for t in self.tasks:
+            if self._task_key(t) == key:
+                # 幂等：已存在完全相同的任务 → 不新增、不新发 TSK 号，返回台账里那条。
+                # 调用方可用 `返回对象 is 传入对象` 判断是否真的新建。
+                return t
         self.tasks.append(task)
         self.save()
         return task

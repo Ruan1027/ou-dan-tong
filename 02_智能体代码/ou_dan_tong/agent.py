@@ -23,6 +23,12 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
     date = now[:10].replace("-", "")
     order_date = now[:10]
     for o in orders:
+        # C-13：分批信息要先参与「交期」判定，否则客户只说「分两批：11-01 出 500，11-03 出 400」
+        # 时 delivery_date 为空 → 被判「缺交期」→ 登记成待补充占位单，批次永远进不了台账。
+        # 分批最晚日期本来就是这张单该交付的日期，先补上再判定。
+        _pre = _parse_batches(o.get("source_excerpt") or "")
+        if _pre and not o.get("delivery_date"):
+            o["delivery_date"] = max(b["date"] for b in _pre)
         existing = store.find_active(o["customer"], o["product"])
         # —— 模块二核心：缺失 / 冲突 / 异常 四级判定 ——
         # raw_text 传入：变更动词判定同时看原文，避免「改成/更新」被漏判为冲突
@@ -86,28 +92,23 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
                     existing["flags"].pop("conflict", None)
                     existing["flags"].pop("missing", None)
                     store.update_order(existing["order_id"], {}, None)
-                # BUG-09 修复：识别分批交期写入 delivery_batches + 已交付/余量
-                _batches = _parse_batches(_src)
-                if _batches:
-                    existing["delivery_batches"] = _batches
-                    delivered = sum(b["qty"] for b in _batches)
-                    existing["delivered_qty"] = delivered
-                    try:
-                        existing["remain_qty"] = int(existing.get("qty") or 0) - delivered
-                    except (TypeError, ValueError):
-                        existing["remain_qty"] = None
-                    store.update_order(existing["order_id"], {}, None)
                 out.append(("update", existing))
             else:
                 # BUG-07 修复：内容完全一致时不再输出"已更新订单"，标记为无变化
                 out.append(("nochange", existing))
+            # C-13：批次识别与「本句有无字段变更」解耦 —— 客户只补一句「分两批」时
+            # 数量/交期都没变（patch 为空），旧写法会整段跳过，批次永远补不进台账。
+            _apply_batches(existing, o.get("source_excerpt") or "", store)
         else:
             o["order_id"] = store.next_order_id(date)
             o["created_at"] = now
             o["updated_at"] = now
             store.add_order(o)
+            # C-13：首单也要识别分批。旧逻辑只在「更新」分支写批次，
+            # 客户第一次下单就说「分两批」会整段丢失，有效交期永远算不出来。
+            _apply_batches(o, o.get("source_excerpt") or "", store)
             out.append(("new", o))
-    new_tasks = []
+    new_tasks, dup_tasks = [], []
     for t in tasks:
         t["task_id"] = store.next_task_id(date)
         # 模块二·7 任务侧缺失追问（BUG-05 修复）：缺负责人/期限登记占位并追问
@@ -117,8 +118,13 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
             cards.append("🟡 任务信息不全已占位：" + cls.message)
         if out:
             t["order_id"] = out[0][1]["order_id"]
-        store.add_task(t)
-        new_tasks.append(t)
+        # BUG-13：add_task 幂等 —— 命中台账里完全相同的任务时返回原对象（不新增、不新发 TSK 号）
+        stored = store.add_task(t)
+        if stored is t:
+            new_tasks.append(t)
+        else:
+            t["task_id"] = stored.get("task_id")
+            dup_tasks.append(stored)
     first_new = next((i for i, (k, _) in enumerate(out) if k == "new"), None)
     for i, (kind, rec) in enumerate(out):
         if kind == "nochange":
@@ -133,6 +139,10 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
     if not out and new_tasks:
         for t in new_tasks:
             cards.append(_task_card(t))
+    # BUG-13：重复任务给一句明确回执，而不是静默丢弃（用户要知道「我说过了，系统没重复记」）
+    if dup_tasks:
+        cards.append("⏸️ 任务已在台账中，未重复登记：" + "；".join(
+            f"{t.get('content')}（{t.get('task_id')}）" for t in dup_tasks))
     if skipped:
         # 走到这里的只有「type 既非 order 也非 task」的条目（缺客户/缺产品的订单
         # 已改为登记待补充占位单，不再进 skipped），故文案不再提「缺客户或产品」。
@@ -493,17 +503,70 @@ def _task_card(t: dict) -> str:
     return f"✅ 已登记任务：{t.get('content')} ｜ 负责人：{owner} ｜ 期限：{deadline}"
 
 
+_BATCH_ITEM_RE = re.compile(r"(\d{1,2})[-/](\d{1,2})\s*[出交发]\s*(\d+)")
+# 分批关键词：「分批」「分两批」「分 3 批」「两批」都要认（C-13）。
+# 原来只判字面「分批」，客户说「分两批」直接不触发 —— 真实话术里这才是主流说法。
+_BATCH_HINT_RE = re.compile(r"分批|分\s*[两二三四五六七八九\d]+\s*批|[两二三四五六七八九\d]\s*批")
+
+
 def _parse_batches(text: str):
-    """BUG-09 修复：从「分两批：11-01 出 500，11-03 出 400」抽取批次列表。无则 None。"""
-    if not text or "分批" not in text:
+    """从「分两批：11-01 出 500，11-03 出 400」抽取批次列表。无则 None。
+
+    C-13 修复：识别口径从「必须出现字面『分批』」放宽为
+    「有分批字样 **或** 至少两条『日期+出+数量』」，覆盖口语主流说法。
+    单条且无分批字样仍返回 None —— 「11-01 出 500」可能只是交期+数量，不能当分批。
+    """
+    if not text:
         return None
-    import re as _re
     items = []
-    for m in _re.finditer(r"(\d{1,2})[-/](\d{1,2})\s*出\s*(\d+)", text):
+    year = datetime.date.today().year
+    for m in _BATCH_ITEM_RE.finditer(text):
         mo, day, qty = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        year = datetime.date.today().year
         items.append({"date": f"{year:04d}-{mo:02d}-{day:02d}", "qty": qty})
-    return items or None
+    if not items:
+        return None
+    if not (_BATCH_HINT_RE.search(text) or len(items) >= 2):
+        return None
+    items.sort(key=lambda b: b["date"])
+    return items
+
+
+def _apply_batches(order: dict, text: str, store: Store) -> bool:
+    """识别并写入分批交期 + 已交付/余量（BUG-09 / C-13）。返回是否发生变更。
+
+    三个设计要点：
+    - **与「本句有没有字段变更」解耦**：客户常常只补一句「分两批：11-01 出 500…」，
+      数量和交期都没变。旧逻辑把这段放在 `if patch:` 里面，整段被跳过，批次永远补不进去。
+    - **幂等**：内容与台账一致时直接返回，不重复写盘、不制造假的变更痕迹。
+    - **护栏**：批次和 ≠ 订单总量时（真实模式下 LLM 常把「某一批的量」抽成总量），
+      绝不写负的余量，改为打标记交人工确认 —— 台账里出现 −400 这种数比不显示更糟。
+    """
+    batches = _parse_batches(text or "")
+    if not batches:
+        return False
+    if order.get("delivery_batches") == batches:
+        return False
+    order["delivery_batches"] = batches
+    last = max(b["date"] for b in batches)
+    # 全部批次交完才算交完：单值交期早于最晚批次日，说明还没交完，以最晚批次日为准
+    cur = order.get("delivery_date")
+    if not cur or str(cur) < last:
+        order["delivery_date"] = last
+    delivered = sum(b["qty"] for b in batches)
+    qty = order.get("qty")
+    if isinstance(qty, int) and not isinstance(qty, bool) and qty > 0 and delivered != qty:
+        order.setdefault("flags", {})["batch_inconsistent"] = (
+            f"批次数量之和 {delivered} ≠ 订单数量 {qty}，请确认总数量后再核对余量")
+        order["delivered_qty"] = delivered
+        order["remain_qty"] = None
+    else:
+        order["delivered_qty"] = delivered
+        try:
+            order["remain_qty"] = int(order.get("qty") or 0) - delivered
+        except (TypeError, ValueError):
+            order["remain_qty"] = None
+    store.update_order(order["order_id"], {}, None)
+    return True
 
 
 def _highlight_query_text(order: dict, suggestion: str = "") -> str:
@@ -536,7 +599,6 @@ def _status_emoji(status: str) -> str:
     """状态对应的 emoji 高亮标记。"""
     return {
         "沟通中": "💬",
-        "已报价": "💰",
         "已确认": "✅",
         "生产中": "🏭",
         "已交付": "🚚",
@@ -756,8 +818,8 @@ _HISTORY_MARKERS = ("改过", "历史", "变更", "履历", "几次", "改了什
 # ---- C-9：查询词表统一放模块级（原先散在 _query_body 里当局部变量，测试断不到，
 # 也无法和 _QUERY_MARKERS 一起维护）----
 _STATUS_KEYWORDS = {
-    "沟通中": ["沟通中", "待报价", "刚下单", "新单"],
-    "已报价": ["已报价", "报过价", "报价"],
+    # 「已报价」状态已废弃：报价类话术归到「沟通中」（未定价维度），与状态机口径一致
+    "沟通中": ["沟通中", "待报价", "刚下单", "新单", "已报价", "报过价", "报价"],
     "已确认": ["已确认", "确认了", "下单了"],
     "生产中": ["生产中", "在生产", "排产", "做货", "在做"],
     "已交付": ["已交付", "已发货", "发了", "送了", "交付"],

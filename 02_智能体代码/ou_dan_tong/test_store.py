@@ -157,7 +157,8 @@ def test_state_machine():
     assert normalize_status("待确认") == "已确认"
     assert normalize_status("已发货") == "已交付"
     assert normalize_status("乱写") is None
-    assert can_transition("沟通中", "已报价") is True
+    # 「已报价」已废弃：别名归一为「沟通中」（2026-10-23 产品口径）
+    assert normalize_status("已报价") == "沟通中"
     assert can_transition("已确认", "沟通中") is False
     assert can_transition(PLACEHOLDER_STATUS, "已确认") is True
     assert next_statuses("已确认") == ["生产中", "部分交付", "已交付", "已取消"], next_statuses("已确认")
@@ -165,7 +166,7 @@ def test_state_machine():
     s, d = _tmp_store()
     try:
         s.add_order({**_order(), "order_id": "ORD-1", "status": "沟通中"})
-        chain = ["已报价", "已确认", "生产中", "已交付"]
+        chain = ["已确认", "生产中", "已交付"]
         for st in chain:
             r = s.set_order_status("ORD-1", st, speaker="李经理", raw=f"进度：{st}")
             assert r["ok"], r

@@ -272,7 +272,7 @@
       <div class="wx-input">
         <input id="wxSender" class="wx-sender" value="王总" title="这条消息是谁发的。平台直接面向顾客，发信人即客户本人。"
                placeholder="发言人" />
-        <textarea id="wxInput" placeholder="以客户身份输入消息，如：小陈，法兰那批再给我加 200 个"></textarea>
+        <textarea id="wxInput" placeholder="以客户身份输入消息，如：小陈，DZ47 那个加到 80 个"></textarea>
         <button type="button" onclick="wxSendInput()">发送</button>
       </div>
     </div>
@@ -339,7 +339,7 @@ const CHAT_SCENARIOS = [
   { label:"✏️ 客户改数量", scenario:"update", sender:"李姐",
     text:"小陈，DZ47 那个加到 80 个" },
   { label:"📥 客户追加订单", scenario:"append", sender:"王总",
-    text:"小陈，法兰那批再给我加 200 个，跟上次一起发" },
+    text:"小陈，法兰那批的货再排一批 300 个的，单价还是 18.5，11-15 交，跟原来那单分开走" },
   { label:"🟡 客户信息缺失", scenario:"missing", sender:"王总",
     text:"小陈，法兰那批的货再帮我排上一批，我这边急" },
   { label:"⚠️ 客户数据冲突", scenario:"conflict", sender:"王总",
@@ -526,6 +526,16 @@ function histHtml(hist){
   }).join("") + `</div>`;
 }
 
+/* 分批交期展示（C-13）：台账必须看得见「分几批、每批多少、各什么时候交」。
+   否则客户说的「分两批：11-01 出 500，11-03 出 400」在屏上只剩一个总数和最终日期，
+   等于分批这件事没被记录。 */
+function batchNote(o){
+  const bs = o && o.delivery_batches;
+  if(!Array.isArray(bs) || !bs.length) return "";
+  const items = bs.map(b=>`${String(b.date||"").slice(5)}×${b.qty}`).join(" / ");
+  return `<div class="cap">分 ${bs.length} 批：${items}</div>`;
+}
+
 function orderRows(orders){
   /* 追加单必须一眼可辨：单号后打「追加」徽章，并在交期下注明追加自哪一单 */
   return orders.map(o=>{
@@ -540,7 +550,7 @@ function orderRows(orders){
       ` title="展开 / 收起本单变更履历"><span class="arw">${open ? "▾" : "▸"}</span>变更履历 ${hist.length}</button>` : '';
     const row = `<tr class="orow" data-oid="${esc(oid)}"><td>${esc(oid)}${tag}${histBtn}</td>`+
       `<td>${esc(o.customer)}</td>`+
-      `<td>${esc(o.product)}</td><td>${esc(o.qty)}</td><td>${esc(o.delivery_date||"—")}${from}</td>`+
+      `<td>${esc(o.product)}</td><td>${esc(o.qty)}</td><td>${esc(o.delivery_date||"—")}${batchNote(o)}${from}</td>`+
       `<td><span class="badge b-${esc(o.status)}">${esc(o.status)}</span></td></tr>`;
     const child = hist.length ? `<tr class="hist-row${open ? "" : " hidden"}" data-for="${esc(oid)}">`+
       `<td colspan="6">${histHtml(hist)}</td></tr>` : '';

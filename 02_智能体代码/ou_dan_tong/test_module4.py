@@ -305,11 +305,11 @@ def test_module4():
     parse_chat("dummy", store, mock=[{
         "type": "order", "customer": _C1, "product": _P1, "qty": 5000,
         "unit_price": "3.2", "delivery_date": "2026-11-20",
-        "status_hint": "已报价", "source_excerpt": "法兰盘 5000 个，3.2，11-20 交"}])
+        "status_hint": "沟通中", "source_excerpt": "法兰盘 5000 个，3.2，11-20 交"}])
     parse_chat("dummy", store, mock=[{
         "type": "order", "customer": _C1, "product": _P1, "qty": 6000,
         "unit_price": "3.2", "delivery_date": "2026-11-20",
-        "status_hint": "已报价", "source_excerpt": "法兰盘数量改成 6000 个"}])
+        "status_hint": "沟通中", "source_excerpt": "法兰盘数量改成 6000 个"}])
     rec6 = next(o for o in store.orders if o["customer"] == _C1 and o["product"] == _P1)
     assert rec6["qty"] == 6000, f"BUG-06: 数量应更新为 6000: {rec6}"
     assert "6000" in rec6.get("source_excerpt", ""), \
@@ -877,10 +877,10 @@ def smoke():
     store.reset()
     parse_chat("dummy", store, mock=[{
         "type": "order", "customer": "温州机电", "product": "法兰盘", "qty": 5000,
-        "status_hint": "已报价", "source_excerpt": "法兰盘 5000 个，3.2，11-20 交"}])
+        "status_hint": "沟通中", "source_excerpt": "法兰盘 5000 个，3.2，11-20 交"}])
     parse_chat("dummy", store, mock=[{
         "type": "order", "customer": "温州机电", "product": "法兰盘", "qty": 6000,
-        "status_hint": "已报价", "source_excerpt": "法兰盘数量改成 6000 个"}])
+        "status_hint": "沟通中", "source_excerpt": "法兰盘数量改成 6000 个"}])
     rec6 = next(o for o in store.orders if o["product"] == "法兰盘")
     assert rec6["qty"] == 6000 and "6000" in rec6.get("source_excerpt", ""), \
         f"BUG-06 依据未同步: {rec6.get('source_excerpt')!r}"

@@ -560,8 +560,28 @@ class Store:
         self.save()
         return order
 
+    @staticmethod
+    def _task_key(t: dict):
+        """任务幂等键（BUG-13）：内容 + 负责人 + 期限 + 原文依据。
+
+        为什么**不用 order_id**：任务的订单关联取自「本批次第一条订单」，
+        同一段聊天重复导入时本批可能只命中部分订单，order_id 会漂移
+        （实测同一条任务先挂 ORD-01、再导入变 ORD-02）→ 键一变就绕过去重、又建一条。
+        用 source_excerpt 更稳：它标识「这句话产生的这个任务」，与批次命中情况无关。
+        """
+        return ((t.get("content") or "").strip(),
+                (t.get("owner") or "").strip(),
+                str(t.get("deadline") or ""),
+                (t.get("source_excerpt") or "").strip())
+
     def add_task(self, task: dict):
         self._norm_task(task)
+        key = self._task_key(task)
+        for t in self.tasks:
+            if self._task_key(t) == key:
+                # 幂等：已存在完全相同的任务 → 不新增、不新发 TSK 号，返回台账里那条。
+                # 调用方可用 `返回对象 is 传入对象` 判断是否真的新建。
+                return t
         self.tasks.append(task)
         self.save()
         return task

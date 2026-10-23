@@ -133,6 +133,10 @@ def validate_extraction(raw):
                 "owner": (item.get("owner") or "").strip(),
                 "deadline": td,
                 "status": "待办",
+                # BUG-13：任务必须带上原文依据。原来这里漏透传，导致
+                # ① 任务卡片/台账无法溯源到「哪句话派的任务」；
+                # ② 幂等判重只能靠 内容+负责人+期限，跨客户同话术会被误合并。
+                "source_excerpt": (item.get("source_excerpt") or "").strip()[:100],
             })
         else:
             skipped.append(item)

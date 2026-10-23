@@ -19,6 +19,8 @@
     T6  真实模式 query / briefing：网关挂掉也要能查单、能出简报（此前零覆盖）
         —— 含 BUG-03 / BUG-04 双向守卫：未来交期说「还有 N 天」、真逾期说「已逾期」
     T7  多轮 sender 一致性：第 N 轮发言人不得串到别的客户名下（防跨轮串台）
+    T8  HTTP 层 sender 透传：POST /api/chat 的 payload.sender 必须到达 do_chat
+        —— 10-23 线上故障就发生在这一层（T1/T2/T3 都在函数层，唯独这一跳此前零覆盖）
 
 设计红线：
     1. **零网络**：LLM 一律是假对象，不产生任何外联；给 web_app 的 Key/URL 是假值，
@@ -29,7 +31,9 @@
 
 运行：python test_real_mode.py
 """
+import datetime
 import inspect
+import json
 import os
 import re
 import socket
@@ -356,7 +360,9 @@ ok("✅" in _q or "已确认" in _q, "T6 query 降级：仍带状态标记", _q[
 
 _b = briefing(_s6, llm=DeadLLM())
 ok(_b.lstrip().startswith("📋"), "T6 briefing 降级：仍出简报", _b[:60])
-ok(re.search(r"2026-\d{2}-\d{2}", _b) is not None, "T6 briefing 降级：简报带日期", _b[:60])
+# 简报日期用「真实今天」断言，不硬编码年份前缀——否则跨年后这条会静默挂掉
+_today = datetime.date.today().isoformat()
+ok(_today in _b, "T6 briefing 降级：简报带今日日期", f"today={_today} ｜ {_b[:60]}")
 ok("TimeoutError" not in _b and "timed out" not in _b.lower(),
    "T6 briefing 降级：不含任何异常字样", _b[:80])
 # BUG-03 / BUG-04 的真实模式守卫（双向：未来交期与已逾期各断言一次，
@@ -418,6 +424,73 @@ ok(len(_s7.orders) == _n7,
    f"T7 两轮都是更新而非新建脏单（{_n7}→{len(_s7.orders)}）",
    f"{_n7}→{len(_s7.orders)}")
 
+# ===========================================================================
+# T8 · 真实模式 HTTP 端到端：POST /api/chat 的 sender 透传（此前只测了函数层）
+# ===========================================================================
+print("\n[T8] HTTP 层 sender 透传：网页端 POST 必须把 sender 一起带来")
+# 10-23 线上故障发生在这一层：前端按钮 POST /api/chat 时没带 sender，
+# do_chat 收到 sender=None → 客户抽成 null → 占位单。T1/T2/T3 都在函数层测过，
+# 唯独「payload.get("sender") → do_chat(sender=...)」这一跳没有测试把守，补上。
+
+
+def _post_json(port, path, payload=None, raw=None):
+    data = raw if raw is not None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}", data=data, method="POST",
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _reseed():
+    web_app._store.reset()
+    handle_message("__seed__", web_app._store, llm=None, mock=WEB_DEMO_SEED)
+
+
+web_app._llm = RuleAwareLLM()   # 真实模式链路 + 按 sender 行事的假模型，零网络
+_p8 = _free_port()
+_srv8 = ThreadingHTTPServer(("127.0.0.1", _p8), web_app.Handler)
+_th8 = threading.Thread(target=_srv8.serve_forever, daemon=True)
+_th8.start()
+try:
+    # ① 带 sender：HTTP 层正确透传 → 正常落单到客户名下
+    _reseed()
+    r = _post_json(_p8, "/api/chat",
+                   {"message": "小陈，DZ47 那个加到 80 个", "sender": "李姐"})
+    _reply = r.get("reply", "")
+    ok(isinstance(r, dict) and "reply" in r, "T8 ①响应是合法 JSON 且含 reply 字段", str(type(r)))
+    ok("✅" in _reply and ("已更新订单" in _reply or "已登记新订单" in _reply),
+       "T8 ①带 sender：HTTP 透传后正常出「✅ 已更新/已登记」", _reply[:70])
+    _hit = next((o for o in web_app._store.orders
+                 if "李姐" in str(o.get("customer")) and o.get("qty") == 80), None)
+    ok(_hit is not None, "T8 ①带 sender：李姐那单经 HTTP 已更新为 80",
+       str([(o.get("customer"), o.get("qty")) for o in web_app._store.orders]))
+
+    # ② 不带 sender：HTTP 层就缺 sender → 占位单路径（线上故障的复现面）
+    _reseed()
+    _n0 = len(web_app._store.orders)
+    r = _post_json(_p8, "/api/chat", {"message": "小陈，DZ47 那个加到 80 个"})
+    _reply = r.get("reply", "")
+    ok("✅" not in _reply, "T8 ②不带 sender：不出「✅ 已更新」成功卡片", _reply[:70])
+    _placeholders = [o for o in web_app._store.orders
+                     if o.get("status") == "待补充"]
+    ok(len(web_app._store.orders) == _n0 + 1 and len(_placeholders) == 1,
+       "T8 ②不带 sender：只多出 1 条「待补充」占位单",
+       f"{_n0}→{len(web_app._store.orders)}，占位 {len(_placeholders)}")
+    ok("客户信息" in _reply, "T8 ②不带 sender：卡片点名缺「客户信息」", _reply[:80])
+
+    # ③ 空 message / ④ 畸形 JSON：都不应 500，应给出引导
+    _reseed()
+    r = _post_json(_p8, "/api/chat", {"message": ""})
+    ok("reply" in r and "✅" not in r["reply"],
+       "T8 ③空消息：不 500，返回引导话术", r.get("reply", "")[:60])
+    r = _post_json(_p8, "/api/chat", raw=b"{not-valid-json")
+    ok("reply" in r, "T8 ④畸形 JSON：不 500，payload 兜底为空后仍返回引导",
+       r.get("reply", "")[:60])
+finally:
+    _srv8.shutdown()
+    _srv8.server_close()
+
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 78)
 print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项 ｜ 耗时 {time.time() - _T0:.2f}s（零网络）")
@@ -448,4 +521,8 @@ print("✅ 真实模式回归全部通过")
 #      （双向断言的意义：只断言「没有『已拖』」是恒真的弱守卫，代码怎么改都绿。）
 #   3. T6 / T7 共同依赖的假 LLM 选择：多轮一律用 ContentAwareLLM（按正文抽），
 #      不要用 RuleAwareLLM —— 后者每轮都返回同一条 canned 数据，串台根本测不出来。
+#   4. T8：把 web_app.py 的 `sender=payload.get("sender")` 改成 `sender=None`
+#      （模拟前端 POST 没带 sender 的线上故障）→ T8① 两项转红：
+#      出占位单、李姐那单没被更新、台账多出一条「无客户 / 80」脏单。
+#      ⚠️ 反向验证做替换时不要带行尾注释——会把闭合括号注释掉，变成 SyntaxError。
 # ---------------------------------------------------------------------------

@@ -24,7 +24,11 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from store import Store, effective_delivery_date, _valid_batches, _invalid_batches
+from store import Store, _valid_batches, _invalid_batches
+from store import effective_delivery_date as store_effective_date
+# 批次交期口径以 contracts 为准（A-2/validator 实际消费的那份）；
+# store 侧同名函数是运行时实现，②' 断言两者必须一致。
+from contracts import effective_delivery_date
 from agent import parse_chat, query, briefing
 from sim_chats import (SCENARIO1_MOCK, SCENARIO3_MOCK, SEED_MOCK,
                        SCENARIO_CONFLICT_MOCK, SCENARIO_ABNORMAL_MOCK,
@@ -252,9 +256,9 @@ def test_pipeline():
     ck.ok(s8.tasks[0]["owner"] == "老周", "T13 任务应保留负责人", s8.tasks[0].get("owner"))
 
     # ---------------- T14 批次交期契约（D-1/D-3，PR #14 合入） ----------------
-    # store.effective_delivery_date / _valid_batches / _invalid_batches 是
-    # 模块三新公开的批次语义口径，A-2（validator 冲突比对）将消费它。
-    # 模块五先把契约锁死：口径一旦被改动，这里立刻红，避免 A-2 接到错误语义。
+    # 批次交期的**单一真相源**是 contracts.effective_delivery_date —— A-2（validator 冲突比对）
+    # 实际消费的就是这一份；store 侧同名函数是运行时用的另一份。
+    # 模块五两扇门一起锁：口径若被改动、或两份实现漂移，T14 立刻红。
     ck.section("T14 批次交期契约（effective_delivery_date）")
     # ① 无批次：回退单值 delivery_date
     ck.ok(effective_delivery_date({"delivery_date": "2026-11-03"}) == "2026-11-03",
@@ -266,6 +270,10 @@ def test_pipeline():
     ck.ok(effective_delivery_date(o_b) == "2026-11-03",
           "T14 有批次时应取最晚批次日期（11-03），而非单值字段（11-01）",
           effective_delivery_date(o_b))
+    # ②' 两份实现必须同口径：contracts（A-2 用）与 store（运行时用）不得漂移
+    ck.ok(store_effective_date(o_b) == effective_delivery_date(o_b),
+          "T14 contracts 与 store 两份 effective_delivery_date 口径必须一致",
+          f"store={store_effective_date(o_b)} contracts={effective_delivery_date(o_b)}")
     # ③ 非法批次被剔除：假日期 2026-13-01（日历上不存在）不得参与
     o_bad = {"delivery_date": "2026-11-03",
              "delivery_batches": [{"qty": 500, "date": "2026-13-01"},
@@ -288,15 +296,26 @@ def test_pipeline():
     # ⑤ 全空：返回 None（不抛异常）
     ck.ok(effective_delivery_date({}) is None,
           "T14 无任何交期信息应返回 None 而非抛异常")
-    # ⑥ 全链路：分批消息落库后，台账单应带批次且有效交期为最晚批次
+    # ⑥ 全链路：分批消息落库后，台账单**必须真的带批次**，且有效交期取最晚批次。
+    #    关键：必须先断言 delivery_batches 非空 —— 否则一旦批次没落库，
+    #    effective 会回退 delivery_date，只要 mock 的 delivery_date 恰好等于最晚批次日，
+    #    这条断言就会「靠回退蒙对」而永远绿（v1.7 原写法即此问题）。
+    #    走两步也贴合真实场景：首单给单值交期 → 客户后来说要分批改期。
+    #    注意用「分批」而非「分两批」：后者当前不被 _parse_batches 识别（见 C-13）。
     s9 = Store()
     s9.reset()
     parse_chat("x", s9, mock=[_order(customer="阿珍（鹿城鞋材）", product="PU 皮鞋面",
+               qty=900, delivery_date="2026-11-05", status_hint="已确认",
+               source_excerpt="PU 皮鞋面 900 个，11-05 交")], now=NOW)
+    parse_chat("x", s9, mock=[_order(customer="阿珍（鹿城鞋材）", product="PU 皮鞋面",
                qty=900, delivery_date="2026-11-03", status_hint="已确认",
-               source_excerpt="分两批：11-01 出 500，11-03 出 400")], now=NOW)
+               source_excerpt="改成 11-03 交，分批：11-01 出 500，11-03 出 400")], now=NOW)
     rec9 = next((o for o in s9.orders if "PU 皮鞋面" in str(o.get("product", ""))), None)
+    ck.ok(rec9 is not None and rec9.get("delivery_batches"),
+          "T14 全链路：分批消息必须落库 delivery_batches（空则该断言失去意义）",
+          rec9 and rec9.get("delivery_batches"))
     ck.ok(rec9 is not None and effective_delivery_date(rec9) == "2026-11-03",
-          "T14 全链路：分批单落库后有效交期应为最晚批次 11-03",
+          "T14 全链路：分批单有效交期应为最晚批次 11-03",
           rec9 and effective_delivery_date(rec9))
 
     ck.report()

@@ -2,6 +2,7 @@
 import datetime
 import os
 import re
+import time
 
 from llm import LLM
 from prompts import card_text, query_text, briefing_text, STATUS_ORDER
@@ -129,9 +130,118 @@ def _days_to(date_str):
         return None
 
 
-def query(question, store: Store, llm: LLM = None):
+# ---- C-2：多轮指代消解（进程内会话上下文，10 分钟过期，不引外部存储）----
+_SESSION_CTX = {}      # {session_key: {"order_ids": [...], "ts": time.time()}}
+_CTX_TTL = 600         # 秒；过期即失效，指代词回退全表匹配
+_PRONOUNS = ("那单", "这单", "这一单", "那一单", "刚才那单", "刚才的单", "刚刚那单")
+
+
+def reset_session_ctx(session_key: str = None):
+    """清空多轮上下文（测试隔离 / 会话重启用）。不传 key 清全部。"""
+    if session_key is None:
+        _SESSION_CTX.clear()
+    else:
+        _SESSION_CTX.pop(session_key, None)
+
+
+def _has_pronoun(q: str) -> bool:
+    """是否含指代词。「它」单独处理，避免「其它/其他」误触发。"""
+    if any(k in q for k in _PRONOUNS):
+        return True
+    return "它" in q and "其它" not in q and "其他" not in q
+
+
+def _has_explicit_entity(q: str, store: Store) -> bool:
+    """这句里是否自带可定位实体（客户全名/前缀、产品名/3字片段、规格）。
+
+    有实体时必须走全表匹配，不能被上一轮的范围锁死：
+    例如先问「温州机电」再问「万博那单到哪了」，若走范围就会答成温州机电（串台）。
+    """
+    for o in store.orders:
+        cust = o.get("customer") or ""
+        prod = o.get("product") or ""
+        spec = o.get("spec") or ""
+        if cust and (cust in q or (len(cust) >= 2 and cust[:2] in q)):
+            return True
+        if prod and (prod in q
+                     or any(prod[i:i + 3] in q for i in range(len(prod) - 2))):
+            return True
+        if spec and len(spec) >= 2 and spec in q:
+            return True
+    return False
+
+
+def _resolve_scope(q: str, store: Store, session_key: str):
+    """C-2：指代追问时返回上一轮命中的订单列表作为查询范围；否则 None（走全表）。"""
+    if not _has_pronoun(q):
+        return None
+    ctx = _SESSION_CTX.get(session_key)
+    if not ctx:
+        return None
+    if time.time() - ctx.get("ts", 0) > _CTX_TTL:   # 过期 → 丢弃，回退全表
+        _SESSION_CTX.pop(session_key, None)
+        return None
+    if _has_explicit_entity(q, store):               # 显式实体优先，防跨客户串台
+        return None
+    ids = set(ctx.get("order_ids") or [])
+    orders = [o for o in store.orders if o.get("order_id") in ids]
+    return orders or None
+
+
+def _remember_ctx(session_key: str, trace: dict):
+    """C-2：把本轮命中的订单写进会话上下文；本轮没命中则清掉，避免污染下一句。"""
+    ids = trace.get("order_ids") or []
+    if ids:
+        _SESSION_CTX[session_key] = {"order_ids": list(ids), "ts": time.time()}
+    else:
+        _SESSION_CTX.pop(session_key, None)
+
+
+# ---- C-3：查询链路日志（默认关，OU_QUERY_LOG=1 开启；只用标准库 print）----
+_QUERY_LOG = os.getenv("OU_QUERY_LOG", "").lower() in ("1", "true", "yes", "on")
+
+
+def _qlog(meta: dict):
+    """输出一行可讲解的查询链路（命中键 / 命中单数 / 是否澄清 / 状态筛选 / 耗时）。"""
+    parts = [f'[QUERY] q="{meta.get("q", "")}"',
+             f'命中键={meta.get("hits") or "无"}',
+             f'命中 {meta.get("n", 0)} 单',
+             (f'澄清=是（输出前 {meta.get("n", 0)} 个候选）' if meta.get("clarify")
+              else "澄清=否"),
+             f'状态筛选={meta.get("status") or "无"}',
+             f'耗时={meta.get("ms", 0.0):.1f}ms']
+    if meta.get("scope"):
+        parts.insert(2, "范围=上一轮命中")
+    if meta.get("mode") not in (None, "orders"):
+        parts.insert(1, f'分支={meta["mode"]}')
+    print(" | ".join(parts))
+
+
+def query(question, store: Store, llm: LLM = None, scope=None, trace=None):
+    """查询入口（C-2/C-3 包装层）：计时、回填 trace、按开关输出链路日志。
+
+    scope：限定候选范围（多轮指代消解用，传上一轮命中的订单对象列表）
+    trace：出参 dict，回填 order_ids / hits / n / clarify / status / mode / ms
+    """
+    t0 = time.time()
+    meta = {"q": question, "hits": "无", "n": 0, "clarify": False, "status": None,
+            "mode": "orders", "order_ids": [], "scope": bool(scope)}
+    text = _query_body(question, store, llm, scope, meta)
+    meta["ms"] = (time.time() - t0) * 1000
+    if trace is not None:
+        trace.update(meta)
+    if _QUERY_LOG:
+        _qlog(meta)
+    return text
+
+
+def _query_body(question, store: Store, llm: LLM = None, scope=None, meta=None):
+    meta = meta if meta is not None else {}
     q = question
+    # C-2：有 scope 时只在上一轮命中范围内找（不扫全表）
+    orders = list(scope) if scope else store.orders
     if any(k in q for k in ("简报", "今天情况", "今日", "今天有哪些", "整体")):
+        meta["mode"] = "briefing"
         return briefing(store, llm)
 
     # ---- 模块四·4：历史追溯分支（识别"改过/历史/变更/履历/几次"等意图）----
@@ -156,12 +266,19 @@ def query(question, store: Store, llm: LLM = None):
             target_status = st
             break
 
+    # 问的是「交期这个字段」而不是「已交付这个状态」：避免「那单的交付日期呢」被当成
+    # 状态筛选=已交付，导致指代追问落空（同时让 C-3 的链路日志不再误导）。
+    _DATE_FIELD_MARKERS = ("交付日期", "交货日期", "交期", "交期是", "什么时候交",
+                           "几号交", "哪天交", "何时交", "什么时候到")
+    if any(k in q for k in _DATE_FIELD_MARKERS):
+        target_status = None
+
     # 2. 时间区间解析（今天/本周/上周/最近N天/近N天）→ 返回 (start, end) 作用于 created_on
     date_range = _parse_date_range(q)
 
     # 3. 多字段命中：客户 / 产品 / 规格；每单计算命中字段集合，按命中数排序
     candidates = []  # (order, hit_fields:set)
-    for o in store.orders:
+    for o in orders:
         hits = set()
         cust = o.get("customer") or ""
         prod = o.get("product") or ""
@@ -202,8 +319,14 @@ def query(question, store: Store, llm: LLM = None):
             candidates.append((o, hits))
 
     # 4. 无任何命中 → 兜底返回全部在途（保留原引导语义）
+    # C-2 例外：指代追问（scope 非空）但这句话没带任何可匹配字段（如「那单的交付日期呢」），
+    # 语义是「就刚才那几单，换个字段再说一遍」，应把上一轮的单原样带出，而不是落兜底。
+    if not candidates and scope:
+        candidates = [(o, {"上一轮"}) for o in orders]
     if not candidates:
-        in_progress = [o for o in store.orders if o.get("status") not in ("已交付", "已取消")]
+        meta["mode"] = "fallback"
+        meta["status"] = target_status
+        in_progress = [o for o in orders if o.get("status") not in ("已交付", "已取消")]
         if not in_progress:
             return "台账中没有找到相关订单，可尝试换称呼、按产品问（如「NMX-60 到哪了」），或查看全部在途订单。"
         return "未命中具体客户/产品/状态，以下是全部在途订单：\n" + "\n".join(
@@ -214,12 +337,19 @@ def query(question, store: Store, llm: LLM = None):
     candidates.sort(key=lambda x: (-len(x[1]), x[0].get("updated_at", "")), reverse=False)
     candidates.sort(key=lambda x: -len(x[1]))  # 主排序：命中数降序
 
+    # C-3：链路元信息（供日志与多轮上下文使用）
+    meta["n"] = len(candidates)
+    meta["hits"] = "、".join(sorted(candidates[0][1])) if candidates else "无"
+    meta["status"] = target_status
+    meta["order_ids"] = [o["order_id"] for o, _ in candidates]
+
     # 6. 输出：每条标注命中字段；用户问"最新"时加"最新状态"强调
     is_latest_query = any(k in q for k in ("最新", "现在", "目前", "当下", "当前状态"))
     prefix = "📌 最新状态：\n" if is_latest_query else ""
 
     # 模块四·4：历史追溯分支 —— 用户问"改过啥/变更历史"时输出 changes[] 履历
     if is_history_query:
+        meta["mode"] = "history"
         hist_lines = []
         for o, hits in candidates:
             tag = "、".join(sorted(hits))
@@ -239,6 +369,9 @@ def query(question, store: Store, llm: LLM = None):
     max_hits = len(candidates[0][1])
     top_n = sum(1 for _, hits in candidates if len(hits) == max_hits)
     if len(candidates) > 1 and top_n > 1:
+        meta["clarify"] = True
+        meta["n"] = top_n
+        meta["order_ids"] = [o["order_id"] for o, _ in candidates[:top_n]]
         lines = [f"🤔 找到 {top_n} 单都匹配，请补充产品名或订单号精确定位："]
         for i, (o, _) in enumerate(candidates[:top_n], 1):
             lines.append(f"{i}. {o['order_id']} {o['customer']}/{o['product']}（状态{o.get('status')}）")
@@ -541,12 +674,13 @@ def _looks_like_order(t: str) -> bool:
 
 
 def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str = None,
-                   force_colloquial: bool = False):
+                   force_colloquial: bool = False, session_key: str = "default"):
     """统一入口：贴群聊→提取；问句→查单；简报词→汇总。
     sender：发这条消息的客户方称谓（真实微信群的发言人昵称），缺了它客户自报类
             消息会被抽成「无客户」而丢弃，故网页端必须一并传入。
     force_colloquial：C-1 显式演示开关，True 时无视 OU_COLLOQUIAL 强制执行口语化改写
             （前端「口语化 开/关」按钮透传这个参数即可，默认模板直出）。
+    session_key：C-2 多轮上下文隔离键，默认单会话；多用户场景传各自 id 即可。
     模块四·3：query/briefing 的输出经 _colloquialize() 口语化（需显式开启，默认模板直出）。
     """
     t = (text or "").strip()
@@ -569,7 +703,11 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str =
     if any(k in t for k in _QUERY_MARKERS):
         if force_colloquial and llm is None:
             llm = _safe_llm()          # C-1：无 Key 也要尝试改写，失败由 _colloquialize 回退
-        ans = query(t, store, llm)
+        # C-2：指代追问优先在上一轮命中范围内解析
+        scope = _resolve_scope(t, store, session_key)
+        trace = {}
+        ans = query(t, store, llm, scope=scope, trace=trace)
+        _remember_ctx(session_key, trace)
         reply = _colloquialize(ans, llm, force=force_colloquial)
         out = {"mode": "query", "reply": reply}
         if force_colloquial and reply is ans:

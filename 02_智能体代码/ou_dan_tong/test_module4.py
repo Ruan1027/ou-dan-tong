@@ -1,7 +1,7 @@
 """模块四 查询应答自测：查询解析/高亮/历史追溯/简报999修复/LLM口语化（无需 Key 可跑）。
 
 归属：队友C（模块四 查询应答）。
-运行：python test_module4.py          → 全量 golden（56 场景，改动 query/口语化/prompt 后必跑）
+运行：python test_module4.py          → 全量 golden（60 场景，改动 query/口语化/prompt 后必跑）
       python test_module4.py --smoke  → 快速回归集（秒级，开发期每次改动先跑）
 注：test_pipeline.py 归队友B（模块五），本文件独立，避免文件冲突。
 三层约定见 collect_failures.md（golden / smoke / 失败样本收集）。
@@ -438,6 +438,90 @@ def test_module4():
     finally:
         _agent_mod._COLLOQUIAL_ON = _prev_switch
 
+    # ---- C-2：多轮指代消解（「那单」落在上一轮命中的同一单上）----
+    from agent import reset_session_ctx, _SESSION_CTX
+    store.reset()
+    reset_session_ctx()
+    parse_chat("dummy", store, mock=[
+        {"type": "order", "customer": "温州机电", "product": "法兰盘", "qty": 300,
+         "delivery_date": "2026-11-20", "unit_price": "1.8", "sample_flag": "大货",
+         "source_excerpt": "法兰盘 300 个，11-20 交"},
+        {"type": "order", "customer": "瑞安五金", "product": "螺栓", "qty": 800,
+         "delivery_date": "2026-12-05", "unit_price": "0.4", "sample_flag": "大货",
+         "source_excerpt": "螺栓 800 个，12-05 交"},
+    ])
+
+    # 场景49：两连问——「法兰盘那单到哪了」→「那单的交付日期呢」
+    r49a = handle_message("法兰盘那单到哪了", store, session_key="t49")
+    assert r49a["mode"] == "query" and "法兰盘" in r49a["reply"], f"C-2: 首问应命中: {r49a}"
+    r49b = handle_message("那单的交付日期呢", store, session_key="t49")
+    assert "法兰盘" in r49b["reply"], f"C-2: 指代应答同一单: {r49b['reply']}"
+    assert "2026-11-20" in r49b["reply"], f"C-2: 应带出该单交期: {r49b['reply']}"
+    assert "螺栓" not in r49b["reply"], f"C-2: 不得串到另一单: {r49b['reply']}"
+
+    # 场景50：跨客户不串台——先问 A，再问「那单」，不能答成 B
+    reset_session_ctx()
+    handle_message("温州机电那单到哪了", store, session_key="t50")
+    r50 = handle_message("那单什么状态", store, session_key="t50")
+    assert "温州机电" in r50["reply"], f"C-2: 应继续答 A 客户: {r50['reply']}"
+    assert "瑞安五金" not in r50["reply"], f"C-2: 串台到 B 客户: {r50['reply']}"
+
+    # 场景51：10 分钟后上下文失效 → 指代词回退全表匹配
+    reset_session_ctx()
+    handle_message("法兰盘那单到哪了", store, session_key="t51")
+    _SESSION_CTX["t51"]["ts"] -= 700  # 人为把时间拨回 11 分钟前
+    r51 = handle_message("那单的交付日期呢", store, session_key="t51")
+    assert "未命中" in r51["reply"], f"C-2: 过期应回退全表兜底: {r51['reply']}"
+    assert "法兰盘" in r51["reply"] and "螺栓" in r51["reply"], \
+        f"C-2: 过期后应看到全表在途单: {r51['reply']}"
+
+    # 场景52：显式实体优先——本轮自带客户/产品时不得被上一轮范围锁死
+    reset_session_ctx()
+    handle_message("法兰盘那单到哪了", store, session_key="t52")
+    r52 = handle_message("螺栓那单到哪了", store, session_key="t52")
+    assert "螺栓" in r52["reply"] and "法兰盘" not in r52["reply"], \
+        f"C-2: 显式实体应走全表: {r52['reply']}"
+
+    # ---- C-3：查询链路日志（默认关，OU_QUERY_LOG=1 或直接置位开启）----
+    import io
+    import contextlib
+
+    reset_session_ctx()
+    _prev_log = _agent_mod._QUERY_LOG
+    try:
+        _agent_mod._QUERY_LOG = True
+        _buf = io.StringIO()
+        with contextlib.redirect_stdout(_buf):
+            query("温州机电 法兰盘 到哪了", store)
+        _log53 = _buf.getvalue()
+        assert "[QUERY]" in _log53, f"C-3: 开关开启应输出链路: {_log53!r}"
+        for _field in ("命中键=", "命中 ", "澄清=", "状态筛选=", "耗时="):
+            assert _field in _log53, f"C-3: 日志缺字段 {_field}: {_log53!r}"
+        assert "澄清=否" in _log53, f"C-3: 单命中应标澄清=否: {_log53!r}"
+
+        # 场景54：澄清分支必须标「澄清=是」并给出候选数
+        store.reset()
+        parse_chat("dummy", store, mock=[
+            {"type": "order", "customer": "温州机电", "product": "法兰盘", "qty": 300,
+             "source_excerpt": "法兰盘 300 个"},
+            {"type": "order", "customer": "温州机电", "product": "阀体", "qty": 200,
+             "source_excerpt": "阀体 200 个"},
+        ])
+        _buf2 = io.StringIO()
+        with contextlib.redirect_stdout(_buf2):
+            query("温州机电 到哪了", store)
+        _log54 = _buf2.getvalue()
+        assert "澄清=是" in _log54, f"C-3: 澄清分支应标注: {_log54!r}"
+
+        # 场景55：开关关闭时零输出（演示默认安静）
+        _agent_mod._QUERY_LOG = False
+        _buf3 = io.StringIO()
+        with contextlib.redirect_stdout(_buf3):
+            query("温州机电 到哪了", store)
+        assert _buf3.getvalue() == "", f"C-3: 开关关闭不得有任何输出: {_buf3.getvalue()!r}"
+    finally:
+        _agent_mod._QUERY_LOG = _prev_log
+
     # ---- C-1 审查修复：无 Key 时 force 通道不再静默失效 ----
     # 场景56：llm=None + 未配 Key（用假 LLM 构造模拟「无 Key」）+ force=True
     #   → 不抛错；仍回退模板原文；返回带 colloquial_fallback 标记（供前端提示「未生效」）
@@ -479,7 +563,8 @@ def test_module4():
 def smoke():
     """P0-4 快速回归集（python test_module4.py --smoke）：守关键链路，秒级跑完。
 
-    与 golden（全量 56 场景）不同，smoke 只覆盖最容易回归的核心路径，
+
+    与 golden（全量 60 场景）不同，smoke 只覆盖最容易回归的核心路径，
     改动 query()/_colloquialize()/prompt 或卡片后，先跑这个再跑全量。
     """
     import time
@@ -627,7 +712,8 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(
         description="模块四查询应答自测（三层：golden 全量 / smoke 快速 / failures 收集）")
-    ap.add_argument("--smoke", action="store_true", help="只跑快速回归集（秒级），默认跑全量 56 场景")
+
+    ap.add_argument("--smoke", action="store_true", help="只跑快速回归集（秒级），默认跑全量 60 场景")
     args = ap.parse_args()
     if args.smoke:
         smoke()

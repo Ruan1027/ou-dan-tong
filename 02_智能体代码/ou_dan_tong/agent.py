@@ -9,7 +9,7 @@ from llm import LLM
 from prompts import card_text, query_text, briefing_text, append_card_text, STATUS_ORDER
 from store import Store
 from validator import validate_extraction, apply_change, classify_order, classify_task
-from contracts import CheckStatus, CHANGE_VERBS, APPEND_INTENTS
+from contracts import CheckStatus, CHANGE_VERBS, APPEND_INTENTS, effective_delivery_date
 from extractor import extract
 
 
@@ -22,14 +22,21 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
     now = now or datetime.datetime.now().isoformat(timespec="seconds")
     date = now[:10].replace("-", "")
     order_date = now[:10]
+    _single_order = len(orders) == 1
     for o in orders:
-        # C-13：分批信息要先参与「交期」判定，否则客户只说「分两批：11-01 出 500，11-03 出 400」
-        # 时 delivery_date 为空 → 被判「缺交期」→ 登记成待补充占位单，批次永远进不了台账。
-        # 分批最晚日期本来就是这张单该交付的日期，先补上再判定。
-        _pre = _parse_batches(o.get("source_excerpt") or "")
-        if _pre and not o.get("delivery_date"):
-            o["delivery_date"] = max(b["date"] for b in _pre)
         existing = store.find_active(o["customer"], o["product"])
+        # C-13：批次必须在校验【之前】挂到来单上。
+        # classify_order 内部用 contracts.effective_delivery_date 比对交期，而该契约只有在
+        # 订单带 delivery_batches 时才取「最晚批次日」。旧逻辑只把批次最晚日回填 delivery_date
+        # （且仅当来单 delivery_date 为空），来单带 delivery_date 时仍以裸字段去比台账批次最晚日
+        # → 同一单被误判「数值矛盾」拦下（模块五 S6-E2 即因此失败）。直接挂 delivery_batches，
+        # effective_delivery_date 自动取最晚批次日，冲突比对自然同口径。
+        _batches_new = _parse_batches(o.get("source_excerpt") or "")
+        if not _batches_new and _single_order:
+            # 摘录被模型截断时退回对话原文；多单场景不兜底，避免把别单的批次挂错
+            _batches_new = _parse_batches(chat_text or "")
+        if _batches_new:
+            o["delivery_batches"] = _batches_new
         # —— 模块二核心：缺失 / 冲突 / 异常 四级判定 ——
         # raw_text 传入：变更动词判定同时看原文，避免「改成/更新」被漏判为冲突
         res = classify_order(o, existing, order_date=order_date, raw_text=chat_text)
@@ -452,7 +459,7 @@ def _query_body(question, store: Store, llm: LLM = None, scope=None, meta=None):
             lines = [f"🤔 找到 {top_n} 单都匹配，请补充产品名或订单号精确定位："]
         for i, (o, _) in enumerate(candidates[:top_n], 1):
             lines.append(f"{i}. {o['order_id']} {o['customer']}/{o['product']}"
-                         f"（状态{o.get('status')}，交期{o.get('delivery_date') or '待定'}）")
+                         f"（状态{o.get('status')}，交期{effective_delivery_date(o) or '待定'}）")
         return status_verdict + "\n".join(lines)
 
     lines = []
@@ -486,7 +493,8 @@ def _status_verdict(target_status, order_list) -> str:
 
 def _suggest(o: dict) -> str:
     """根据交期生成主动建议（从 query() 抽出复用）。"""
-    days = _days_to(o.get("delivery_date"))
+    # C-10：分批单 delivery_date 常为 null，走契约的有效交期才不会静默丢建议
+    days = _days_to(effective_delivery_date(o))
     if days is None:
         return ""
     if 0 <= days <= 3:
@@ -544,14 +552,15 @@ def _apply_batches(order: dict, text: str, store: Store) -> bool:
     batches = _parse_batches(text or "")
     if not batches:
         return False
-    if order.get("delivery_batches") == batches:
-        return False
+    # 幂等判定放在「累计」之前：内容与台账一致时不再写盘、不制造假变更痕迹，
+    # 但 delivered_qty/remain_qty 仍要算（parse_chat 已在校验前把 delivery_batches 挂到 o 上，
+    # 若这里直接早退，新建分批单的已交付量会一直是 None）。
+    changed = order.get("delivery_batches") != batches
     order["delivery_batches"] = batches
-    last = max(b["date"] for b in batches)
-    # 全部批次交完才算交完：单值交期早于最晚批次日，说明还没交完，以最晚批次日为准
-    cur = order.get("delivery_date")
-    if not cur or str(cur) < last:
-        order["delivery_date"] = last
+    # 注意：不在这里把 delivery_date 改写成最晚批次日。
+    # 单值 delivery_date 保留「客户所述日期」，真正的有效交期一律由
+    # contracts.effective_delivery_date（取 delivery_batches 最晚日）计算，
+    # 避免字段与有效交期混用。显示/冲突比对都走 effective_delivery_date，故无需回写。
     delivered = sum(b["qty"] for b in batches)
     qty = order.get("qty")
     if isinstance(qty, int) and not isinstance(qty, bool) and qty > 0 and delivered != qty:
@@ -565,8 +574,9 @@ def _apply_batches(order: dict, text: str, store: Store) -> bool:
             order["remain_qty"] = int(order.get("qty") or 0) - delivered
         except (TypeError, ValueError):
             order["remain_qty"] = None
-    store.update_order(order["order_id"], {}, None)
-    return True
+    if changed:
+        store.update_order(order["order_id"], {}, None)
+    return changed
 
 
 def _highlight_query_text(order: dict, suggestion: str = "") -> str:
@@ -584,7 +594,9 @@ def _highlight_query_text(order: dict, suggestion: str = "") -> str:
     qty = order.get("qty")
     if qty is not None and f"×{qty}" in base:
         base = base.replace(f"×{qty}", f"📦 ×{qty}")
-    dd = order.get("delivery_date")
+    # C-10：替换目标串 `预计{dd}交付` 由 prompts.query_text 产出，而那边已用契约的有效交期；
+    # 这里若还读裸字段，分批单 dd 为 None → 匹配不中 → 📅 高亮静默丢失。
+    dd = effective_delivery_date(order)
     if dd and f"预计{dd}交付" in base:
         base = base.replace(f"预计{dd}交付", f"📅 预计{dd}交付")
     # 变更履历提示：有 changes[] 时告诉用户这是最新版，并标变更次数
@@ -664,12 +676,22 @@ def briefing(store: Store, llm: LLM = None):
     due_before = (datetime.date.today() + datetime.timedelta(days=3)).isoformat()
     new_orders = store.query_orders(created_on=today)
     pending = store.query_orders(status="沟通中")
-    due = store.query_orders(due_before=due_before)
+    # C-10：临期口径改走「有效交期」（分批单 = 最晚批次日）。
+    # store.query_orders(due_before=) 读的是单值 delivery_date（store.py），
+    # 分批单会按旧日期误报临期、或直接漏报，故在 agent 内按有效交期重算，不改 store.py（模块三资产）。
+    # 过滤条件与原实现逐字对齐：有交期（dd 非空）+ dd <= 阈值 + 排除「已交付」。
+    due_pairs = []
+    for o in store.orders:
+        dd = effective_delivery_date(o)
+        if dd and dd <= due_before and o.get("status") != "已交付":
+            due_pairs.append((o, dd))
+    due = [o for o, _ in due_pairs]
     overdue_tasks = store.query_tasks(overdue_before=today)
 
     def _urgent(o):
         # 无交期返回 None，不再返回 999（修复"已拖 999 天"bug）
-        return _days_to(o.get("delivery_date"))
+        # C-10：分批单走最晚批次日，否则永远判成「无交期」而选不进最急
+        return _days_to(effective_delivery_date(o))
 
     if pending:
         # 优先选有交期且 days 最小（含负数=已逾期）的单做"最急"
@@ -678,7 +700,8 @@ def briefing(store: Store, llm: LLM = None):
             most_urgent_order = min(with_due, key=_urgent)
             days = _urgent(most_urgent_order)
             tag = "已逾期" if days < 0 else f"还有 {days} 天"
-            most_urgent = f"{most_urgent_order['customer']} {tag}（交期 {most_urgent_order['delivery_date']}）"
+            most_urgent = (f"{most_urgent_order['customer']} {tag}"
+                           f"（交期 {effective_delivery_date(most_urgent_order)}）")
         else:
             # 待报价但都没写交期
             most_urgent = f"{pending[0]['customer']} 待定交期"
@@ -691,7 +714,7 @@ def briefing(store: Store, llm: LLM = None):
         "pending_quote": len(pending),
         "most_urgent": most_urgent,
         "due_soon": len(due),
-        "due_list": "、".join(f"{o['customer']}({o['delivery_date']})" for o in due) or "无",
+        "due_list": "、".join(f"{o['customer']}({dd})" for o, dd in due_pairs) or "无",
         "overdue": len(overdue_tasks),
         "overdue_list": "、".join(f"{t['owner'] or '待认领'}的「{t['content']}」" for t in overdue_tasks) or "无",
     }
@@ -804,14 +827,10 @@ _QUERY_MARKERS = ("到哪", "状态", "查", "进度", "什么时候交", "几�
                  "改过", "历史", "变更", "履历", "几次", "改了什么", "改了啥",
                  "变更记录", "变更历史", "改动", "修改记录")
 _BRIEFING_MARKERS = ("简报", "今天情况", "今日", "整体情况", "汇总", "今天有哪些")
-# 历史追溯类问句：必须先于「订单/改单意图」判定，否则「法兰那单改过几次」里的
-# 「改」会被 CHANGE_VERBS 命中，误送进 parse_chat 去抽订单 → 抽出空卡片
-# → 界面一片空白（用户观感：点了查询没反应）。
-_HISTORY_QUERY_MARKERS = ("改过", "改了什么", "改了啥", "怎么改的", "变更记录",
-                          "变更历史", "修改记录", "历史", "履历", "几次")
-
 # 审查 C-4：历史追随意图词表提到模块级——handle_message 需要在 `_looks_like_order` 之前
 # 先按历史意图分流，否则「改过啥」里的「改」会被 contracts.CHANGE_VERBS 判成改单指令。
+# 仅保留这一份 _HISTORY_MARKERS（C-13 清理：原 _HISTORY_QUERY_MARKERS 与之重复，
+# 两份并存时改一处忘一处必然漂移，且其为死代码无任何引用，已删除）。
 _HISTORY_MARKERS = ("改过", "历史", "变更", "履历", "几次", "改了什么", "改了啥",
                     "变更记录", "变更历史", "改动", "修改记录", "怎么改的")
 

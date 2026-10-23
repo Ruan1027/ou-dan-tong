@@ -1,7 +1,7 @@
 """模块四 查询应答自测：查询解析/高亮/历史追溯/简报999修复/LLM口语化（无需 Key 可跑）。
 
 归属：队友C（模块四 查询应答）。
-运行：python test_module4.py          → 全量 golden（71 场景，改动 query/口语化/prompt 后必跑）
+运行：python test_module4.py          → 全量 golden（82 场景，改动 query/口语化/prompt 后必跑）
       python test_module4.py --smoke  → 快速回归集（秒级，开发期每次改动先跑）
 注：test_pipeline.py 归队友B（模块五），本文件独立，避免文件冲突。
 三层约定见 collect_failures.md（golden / smoke / 失败样本收集）。
@@ -789,6 +789,211 @@ def test_module4():
     assert "客户A" in _ans71 and "客户C" not in _ans71, \
         f"C-9: 问「交付时间」不得被当成状态筛选=已交付: {_ans71!r}"
 
+    # ==== C-10：分批单交期口径（合并前 71 个场景里没有任何一份夹具把 ====
+    # ==== delivery_batches 送进 query/briefing，等于零覆盖）====
+    import datetime as _dt
+    _td = _dt.date.today()
+
+    def _d(n):
+        return (_td + _dt.timedelta(days=n)).isoformat()
+
+    # 场景72：分批单的「卡片交期 / 主动建议 / 📅 高亮」三处都必须取最晚批次日
+    _s72 = Store()
+    _s72.reset()
+    _s72.add_order({"order_id": "ORD-T72-01", "customer": "王总", "product": "304法兰盘 DN80",
+                    "qty": 800, "status": "生产中", "delivery_date": None,
+                    "delivery_batches": [{"qty": 500, "date": _d(2)},
+                                         {"qty": 300, "date": _d(3)}],
+                    "created_at": _d(-1), "updated_at": _d(-1),
+                    "source_excerpt": "法兰盘分两批：500 和 300"})
+    _a72 = query("304法兰盘 到哪了", _s72)
+    assert f"预计{_d(3)}交付" in _a72, f"C-10: 交期应为最晚批次日 {_d(3)}: {_a72!r}"
+    assert "距交期还有 3 天" in _a72, f"C-10: 主动建议须按最晚批次算天数: {_a72!r}"
+    assert "📅" in _a72, f"C-10: 分批单交期高亮不得丢失（dd 读裸字段会为 None）: {_a72!r}"
+    assert "None" not in _a72, f"C-10: 不得露出 None: {_a72!r}"
+
+    # 场景73：简报临期清单三分支——误报 / 漏报 / 已交付排除
+    _s73 = Store()
+    _s73.reset()
+    # A：单值交期是今天（旧口径必误报临期），但最晚批次在 +40 → 不得进临期
+    _s73.add_order({"order_id": "ORD-T73-A", "customer": "甲客户", "product": "垫片A",
+                    "qty": 1, "status": "生产中", "delivery_date": _d(0),
+                    "delivery_batches": [{"qty": 1, "date": _d(40)}],
+                    "created_at": _d(-1), "updated_at": _d(-1), "source_excerpt": "A"})
+    # B：单值 +30（旧口径漏报），最晚批次 +2 → 必须进临期
+    _s73.add_order({"order_id": "ORD-T73-B", "customer": "乙客户", "product": "垫片B",
+                    "qty": 1, "status": "生产中", "delivery_date": _d(30),
+                    "delivery_batches": [{"qty": 1, "date": _d(2)}],
+                    "created_at": _d(-1), "updated_at": _d(-1), "source_excerpt": "B"})
+    # C：已交付且有效交期在 +1 → 必须排除（沿用原 query_orders 的排除语义）
+    _s73.add_order({"order_id": "ORD-T73-C", "customer": "丙客户", "product": "垫片C",
+                    "qty": 1, "status": "已交付", "delivery_date": _d(1),
+                    "created_at": _d(-1), "updated_at": _d(-1), "source_excerpt": "C"})
+    _b73 = briefing(_s73)
+    assert "临期交付：1 笔" in _b73, f"C-10: 有且只有乙客户应进临期: {_b73!r}"
+    assert f"乙客户({_d(2)})" in _b73, f"C-10: due_list 须用最晚批次日: {_b73!r}"
+    assert "甲客户" not in _b73, f"C-10: 按单值日期误报临期（应为 +40）: {_b73!r}"
+    assert "丙客户" not in _b73, f"C-10: 已交付必须排除: {_b73!r}"
+    assert "None" not in _b73, f"C-10: 简报不得出现 None: {_b73!r}"
+
+    # ==== merge 回归：反向产品简称（抽函数时被静默丢失，git 不报冲突）====
+    # 场景74：问「法兰那单」必须命中全名「304法兰盘 DN80」；且两个调用点同源
+    _s74 = Store()
+    _s74.reset()
+    _s74.add_order({"order_id": "ORD-T74-01", "customer": "王总", "product": "304法兰盘 DN80",
+                    "qty": 250, "status": "已确认", "delivery_date": _d(10),
+                    "created_at": _d(-1), "updated_at": _d(-1), "source_excerpt": "法兰 250 个"})
+    _a74 = query("法兰那单到哪了", _s74)
+    assert "304法兰盘 DN80" in _a74, f"merge: 反向产品简称必须命中: {_a74!r}"
+    assert _agent_mod._has_explicit_entity("法兰那单到哪了", _s74) is True, \
+        "merge: 显式实体判定与候选打分必须同源（否则指代追问会锁死在上一轮范围）"
+
+    # ==== C-11：补真缺口 ====
+    # 场景75：reset_session_ctx(session_key) 带参——只清指定会话，不误伤其他会话
+    from agent import reset_session_ctx, _SESSION_CTX
+    reset_session_ctx()
+    _s75 = Store()
+    _s75.reset()
+    _s75.add_order({"order_id": "ORD-T75-01", "customer": "温州机电", "product": "法兰盘",
+                    "qty": 10, "status": "生产中", "delivery_date": _d(10),
+                    "created_at": _d(-1), "updated_at": _d(-1), "source_excerpt": "法兰盘 10"})
+    _s75.add_order({"order_id": "ORD-T75-02", "customer": "瑞安五金", "product": "螺栓",
+                    "qty": 20, "status": "生产中", "delivery_date": _d(12),
+                    "created_at": _d(-1), "updated_at": _d(-1), "source_excerpt": "螺栓 20"})
+    handle_message("法兰盘那单到哪了", _s75, session_key="t75a")
+    handle_message("螺栓那单到哪了", _s75, session_key="t75b")
+    assert "t75a" in _SESSION_CTX and "t75b" in _SESSION_CTX, "C-11 前置：两会话都应写入上下文"
+    reset_session_ctx("t75a")
+    assert "t75a" not in _SESSION_CTX, "C-11: 带参 reset 必须删掉指定会话"
+    assert "t75b" in _SESSION_CTX, "C-11: 带参 reset 不得误删其他会话"
+
+    # 场景76：交错会话 A→B→A，B 的写入不得覆盖 A 的 scope
+    reset_session_ctx()
+    _s76 = Store()
+    _s76.reset()
+    _s76.add_order({"order_id": "ORD-T76-01", "customer": "温州机电", "product": "法兰盘",
+                    "qty": 10, "status": "生产中", "delivery_date": _d(10),
+                    "created_at": _d(-1), "updated_at": _d(-1), "source_excerpt": "法兰盘 10"})
+    _s76.add_order({"order_id": "ORD-T76-02", "customer": "瑞安五金", "product": "螺栓",
+                    "qty": 20, "status": "已确认", "delivery_date": _d(12),
+                    "created_at": _d(-1), "updated_at": _d(-1), "source_excerpt": "螺栓 20"})
+    handle_message("法兰盘那单到哪了", _s76, session_key="t76a")
+    handle_message("螺栓那单到哪了", _s76, session_key="t76b")
+    _r76 = handle_message("那单什么状态", _s76, session_key="t76a")
+    assert "法兰盘" in _r76["reply"], f"C-11: A 会话应仍锁定法兰盘: {_r76['reply']!r}"
+    assert "螺栓" not in _r76["reply"], f"C-11: B 会话的写入不得污染 A: {_r76['reply']!r}"
+
+    # 场景77：三轮澄清不退化 + 补齐产品名后单选
+    reset_session_ctx()
+    _s77 = Store()
+    _s77.reset()
+    _s77.add_order({"order_id": "ORD-T77-01", "customer": "温州机电", "product": "法兰盘",
+                    "qty": 10, "status": "生产中", "delivery_date": _d(10),
+                    "created_at": _d(-1), "updated_at": _d(-1), "source_excerpt": "法兰盘 10"})
+    _s77.add_order({"order_id": "ORD-T77-02", "customer": "温州机电", "product": "螺栓",
+                    "qty": 20, "status": "已确认", "delivery_date": _d(12),
+                    "created_at": _d(-1), "updated_at": _d(-1), "source_excerpt": "螺栓 20"})
+    _r77a = handle_message("温州机电 到哪了", _s77, session_key="t77")
+    assert "请补充产品名" in _r77a["reply"], f"C-11 前置：首轮应澄清: {_r77a['reply']!r}"
+    _r77b = handle_message("那单呢", _s77, session_key="t77")
+    assert "就是这 2 单" in _r77b["reply"], f"C-11: 第二轮不得重复首轮话术: {_r77b['reply']!r}"
+    _r77c = handle_message("那单呢", _s77, session_key="t77")
+    assert "就是这 2 单" in _r77c["reply"], f"C-11: 第三轮不得退化: {_r77c['reply']!r}"
+    _r77d = handle_message("温州机电 法兰盘 那单到哪了", _s77, session_key="t77")
+    assert "请补充产品名" not in _r77d["reply"], \
+        f"C-11: 补齐产品名后必须单命中而非再澄清: {_r77d['reply']!r}"
+    assert "法兰盘" in _r77d["reply"], f"C-11: 应命中法兰盘: {_r77d['reply']!r}"
+
+    # 场景78：LLM.chat 在真无 Key 时抛 RuntimeError（llm.py:34-38 此前从未被直覆）
+    # 注意：config 在 import 期就把 Key 绑成模块常量，os.environ.pop 无效，必须 patch 模块属性
+    import llm as _lm
+    _bak_ds78 = _lm.DEEPSEEK_API_KEY
+    try:
+        _lm.DEEPSEEK_API_KEY = ""
+        try:
+            _lm.LLM("deepseek").chat("system", "user")
+            raise AssertionError("C-11: 无 Key 时 LLM.chat 必须抛 RuntimeError")
+        except RuntimeError as _e78:
+            assert "API Key" in str(_e78), f"C-11: 报错应说明缺 Key: {_e78}"
+    finally:
+        _lm.DEEPSEEK_API_KEY = _bak_ds78
+
+    # 场景79：历史词表单一化——master 的第二份表已删，「变更/改动」仍在超集里
+    assert not hasattr(_agent_mod, "_HISTORY_QUERY_MARKERS"), \
+        "merge: master 的 _HISTORY_QUERY_MARKERS 必须删除，否则两份词表必然漂移"
+    for _k79 in ("变更", "改动"):
+        assert _k79 in _agent_mod._HISTORY_MARKERS, f"merge: 词表应为超集，缺「{_k79}」"
+    assert handle_message("法兰盘 变更", _s77, session_key="t79")["mode"] == "query", \
+        "merge: 「变更」必须走历史查询分支（旧版只在 master 表里，dev-c 表外会落改单）"
+
+    # ==== C-13：分批交期「解析不进来」+「校验期误判冲突」 ====
+    # 队友B 在 PR#20 给的配方经实测成立：① _parse_batches 触发词 "分批" 是连续子串
+    # 匹配，「分两批」永远命中不了；② 批次解析排在 classify_order 之后且只写台账，
+    # 来单侧没有 delivery_batches，effective_delivery_date 回退单值交期 → 与台账的
+    # 批次最晚日误判「数值矛盾」，第 3 轮回填第一批交期即被拦（S6-E2 失败根因）。
+    _y13 = _td.year
+
+    # 场景80：触发词必须容忍量词插入，且无明细时不得凭空造批次
+    for _txt80, _n80 in (
+        ("分两批：11-01 出 500，11-03 出 400", 2),
+        ("分批：11-01 出 500，11-03 出 400", 2),
+        ("分3批，11-01出100，11-02出200，11-03出50", 3),
+    ):
+        _got80 = _agent_mod._parse_batches(_txt80)
+        assert _got80 is not None and len(_got80) == _n80, \
+            f"C-13: 「{_txt80}」应解析出 {_n80} 批，实得 {_got80}"
+    # 放宽正则后「部分批次」「十分批评」也会命中触发词，必须靠「X 出 N」硬格式挡住
+    for _txt80 in ("分两批", "这是部分批次", "十分批评", "没有批次信息"):
+        assert _agent_mod._parse_batches(_txt80) is None, \
+            f"C-13: 「{_txt80}」无「X 出 N」明细，必须返回 None，不得凭空造批次"
+
+    # 场景81：完整链路——批次真正入库，且新建/更新两条路径都不再判冲突
+    _s81 = Store()
+    _s81.reset()
+    _mock81 = [{"type": "order", "customer": "恒达五金", "product": "PU 皮鞋面", "qty": 900,
+                "delivery_date": f"{_y13}-11-01", "status": "已确认",
+                "source_excerpt": "分两批：11-01 出 500，11-03 出 400"}]
+    _c81a, _ = parse_chat("分两批：11-01 出 500，11-03 出 400", _s81,
+                          mock=_mock81, now=f"{_y13}-10-21T10:00:00")
+    _o81 = next(o for o in _s81.orders if o["customer"] == "恒达五金")
+    assert _o81.get("delivery_batches"), f"C-13: 新建路径批次未入库: {_o81.get('delivery_batches')}"
+    assert "冲突" not in _c81a, f"C-13: 新建分批单不得判冲突: {_c81a!r}"
+    assert _agent_mod.effective_delivery_date(_o81) == f"{_y13}-11-03", \
+        f"C-13: 有效交期应取最晚批次 11-03，实得 {_agent_mod.effective_delivery_date(_o81)}"
+    assert _o81.get("delivered_qty") == 900, f"C-13: 已交付量应累计批次: {_o81.get('delivered_qty')}"
+    # 更新路径：来单交期是「第一批」11-01，台账是 11-03，旧逻辑在此撞冲突
+    _c81b, _ = parse_chat("分两批：11-01 出 500，11-03 出 400", _s81,
+                          mock=_mock81, now=f"{_y13}-10-21T11:00:00")
+    assert "冲突" not in _c81b, f"C-13: 更新分批单不得判冲突: {_c81b!r}"
+
+    # 场景82：边界——单订单批次挂载；多订单不得串批次
+    _s82a = Store()
+    _s82a.reset()
+    # 82a：单订单，批次明细在摘录里 → 必须解析入库（不依赖对话原文兜底）
+    parse_chat("王总 法兰盘 900，11-01 交", _s82a, mock=[{
+        "type": "order", "customer": "王总", "product": "法兰盘", "qty": 900,
+        "delivery_date": f"{_y13}-11-01", "status": "已确认",
+        "source_excerpt": "分两批：11-01 出 500，11-03 出 400"}], now=f"{_y13}-10-21T12:00:00")
+    _o82a = next(o for o in _s82a.orders if o["customer"] == "王总")
+    assert _o82a.get("delivery_batches"), \
+        f"C-13: 单订单批次明细在摘录里应解析入库: {_o82a.get('source_excerpt')}"
+    assert "冲突" not in str(_o82a.get("flags", {})), \
+        f"C-13: 单订单分批不得误判冲突: {_o82a.get('flags')}"
+    # 82b：多订单 + 各自摘录都不含批次 → 不得把原文里「恒达」的批次挂到「瑞安」上
+    _s82b = Store()
+    _s82b.reset()
+    parse_chat("恒达分两批：11-01 出 500，11-03 出 400；另外瑞安要 200 个螺栓", _s82b, mock=[
+        {"type": "order", "customer": "恒达五金", "product": "PU 皮鞋面", "qty": 900,
+         "delivery_date": f"{_y13}-11-01", "status": "已确认", "source_excerpt": "恒达 900"},
+        {"type": "order", "customer": "瑞安机械", "product": "螺栓", "qty": 200,
+         "delivery_date": f"{_y13}-11-15", "status": "已确认",
+         "source_excerpt": "瑞安 200 个螺栓"},
+    ], now=f"{_y13}-10-21T13:00:00")
+    _bolt82 = next((o for o in _s82b.orders if o["customer"] == "瑞安机械"), None)
+    assert _bolt82 is not None, "C-13: 多订单场景瑞安单应正常入库"
+    assert not _bolt82.get("delivery_batches"), \
+        f"C-13: 多单场景不得把别单的批次挂错: {_bolt82.get('delivery_batches')}"
+
     print("ALL TESTS PASSED ✅")
     print("-" * 40)
     print(b)
@@ -798,7 +1003,7 @@ def smoke():
     """P0-4 快速回归集（python test_module4.py --smoke）：守关键链路，秒级跑完。
 
 
-    与 golden（全量 71 场景）不同，smoke 只覆盖最容易回归的核心路径，
+    与 golden（全量 82 场景）不同，smoke 只覆盖最容易回归的核心路径，
     改动 query()/_colloquialize()/prompt 或卡片后，先跑这个再跑全量。
     """
     import time
@@ -991,7 +1196,40 @@ def smoke():
     assert _agent_mod._has_explicit_entity("客户B", _s17) is False, \
         "C-7: 泛词前缀不得算显式实体"
 
-    print(f"SMOKE TESTS PASSED ✅（{time.time() - t0:.2f}s，17 个检查点）")
+    # C-10：分批单交期（最高风险改动进秒级门禁）——delivery_date 为 None 时
+    # 若还读裸字段，📅 高亮会静默丢失，故这里直接盯高亮与 None 泄漏
+    import datetime as _dt18
+    _td18 = _dt18.date.today()
+    _s18 = Store()
+    _s18.reset()
+    _s18.add_order({"order_id": "ORD-SM-18", "customer": "王总", "product": "304法兰盘 DN80",
+                    "qty": 800, "status": "生产中", "delivery_date": None,
+                    "delivery_batches": [
+                        {"qty": 500, "date": (_td18 + _dt18.timedelta(days=2)).isoformat()},
+                        {"qty": 300, "date": (_td18 + _dt18.timedelta(days=3)).isoformat()}],
+                    "created_at": (_td18 - _dt18.timedelta(days=1)).isoformat(),
+                    "updated_at": (_td18 - _dt18.timedelta(days=1)).isoformat(),
+                    "source_excerpt": "法兰盘分两批"})
+    _a18 = query("304法兰盘 到哪了", _s18)
+    assert "📅" in _a18 and "None" not in _a18, f"C-10: 分批单交期高亮不得丢: {_a18!r}"
+
+    # ⑲ C-13：批次解析 + 校验顺序。触发词若退回「分批」连续子串，或批次又排到
+    # classify_order 之后，新增单会以单值交期去比台账批次最晚日 → 误判冲突被拦。
+    _s19 = Store()
+    _s19.reset()
+    _c19, _ = parse_chat(
+        "分两批：11-01 出 500，11-03 出 400", _s19,
+        mock=[{"type": "order", "customer": "恒达五金", "product": "PU 皮鞋面", "qty": 900,
+               "delivery_date": f"{_td18.year}-11-01", "status": "已确认",
+               "source_excerpt": "分两批：11-01 出 500，11-03 出 400"}],
+        now=f"{_td18.year}-10-21T10:00:00")
+    _o19 = next((o for o in _s19.orders if o["customer"] == "恒达五金"), None)
+    assert _o19 and _o19.get("delivery_batches"), f"C-13: 「分两批」批次未入库: {_o19}"
+    assert "冲突" not in _c19, f"C-13: 分批单不得判冲突: {_c19!r}"
+    assert _agent_mod.effective_delivery_date(_o19) == f"{_td18.year}-11-03", \
+        f"C-13: 有效交期应取最晚批次: {_agent_mod.effective_delivery_date(_o19)}"
+
+    print(f"SMOKE TESTS PASSED ✅（{time.time() - t0:.2f}s，19 个检查点）")
 
 
 if __name__ == "__main__":
@@ -999,7 +1237,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(
         description="模块四查询应答自测（三层：golden 全量 / smoke 快速 / failures 收集）")
 
-    ap.add_argument("--smoke", action="store_true", help="只跑快速回归集（秒级），默认跑全量 71 场景")
+    ap.add_argument("--smoke", action="store_true", help="只跑快速回归集（秒级），默认跑全量 82 场景")
     args = ap.parse_args()
     if args.smoke:
         smoke()

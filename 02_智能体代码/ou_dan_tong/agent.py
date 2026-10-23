@@ -833,6 +833,28 @@ def _has_qty(o: dict) -> bool:
         return False
 
 
+def _query_focus(trace: dict) -> dict:
+    """把 query() 的链路元信息转成网页端可直接执行的定位指令（2026-10-23 交互改版）。
+
+    网页端不再渲染「命中」结果栏，而是按这里给的 order_ids 跳到订单台账对应行、
+    浅蓝高亮；kind=history 时连变更履历子单一起展开。
+
+    kind 取值（与前端 applyQuery 一一对应）：
+      orders    命中订单 → 跳转高亮
+      history   变更履历查询 → 跳转高亮 + 自动展开子单
+      clarify   多单并列匹配 → 全部高亮，提示补充产品名/单号
+      fallback  未精确命中 → 高亮全部在途单，并按文本说明
+      briefing  问的是简报 → 结果落「今日简报」面板，不占查询区
+    文本答案一律保留：命令行、测试、微信侧都直接用它，网页端只是多了一条更直观的路。
+    """
+    if not trace:
+        return {"kind": "orders", "order_ids": []}
+    kind = trace.get("mode") or "orders"
+    if trace.get("clarify"):
+        kind = "clarify"          # clarify 优先于 mode=orders，否则前端会当成单命中高亮
+    return {"kind": kind, "order_ids": list(trace.get("order_ids") or [])}
+
+
 def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str = None,
                    force_colloquial: bool = False, session_key: str = "default"):
     """统一入口：贴群聊→提取；问句→查单；简报词→汇总。
@@ -868,7 +890,7 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str =
         ans = query(t, store, llm, scope=scope, trace=trace)
         _remember_ctx(session_key, trace)
         reply = _colloquialize(ans, llm, force=force_colloquial)
-        out = {"mode": "query", "reply": reply}
+        out = {"mode": "query", "reply": reply, "focus": _query_focus(trace)}
         if force_colloquial and reply is ans:
             out["colloquial_fallback"] = True
         return out
@@ -891,7 +913,7 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str =
         ans = query(t, store, llm, scope=scope, trace=trace)
         _remember_ctx(session_key, trace)
         reply = _colloquialize(ans, llm, force=force_colloquial)
-        out = {"mode": "query", "reply": reply}
+        out = {"mode": "query", "reply": reply, "focus": _query_focus(trace)}
         if force_colloquial and reply is ans:
             out["colloquial_fallback"] = True   # 无 Key / 事实失真 / 异常时都会走这里
         return out

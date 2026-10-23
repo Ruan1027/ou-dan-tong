@@ -1,7 +1,7 @@
 """模块四 查询应答自测：查询解析/高亮/历史追溯/简报999修复/LLM口语化（无需 Key 可跑）。
 
 归属：队友C（模块四 查询应答）。
-运行：python test_module4.py          → 全量 golden（60 场景，改动 query/口语化/prompt 后必跑）
+运行：python test_module4.py          → 全量 golden（71 场景，改动 query/口语化/prompt 后必跑）
       python test_module4.py --smoke  → 快速回归集（秒级，开发期每次改动先跑）
 注：test_pipeline.py 归队友B（模块五），本文件独立，避免文件冲突。
 三层约定见 collect_failures.md（golden / smoke / 失败样本收集）。
@@ -610,6 +610,185 @@ def test_module4():
                                  "source_excerpt": "法兰盘改成 500 个"}])
     assert _r60["mode"] == "parse", f"C-4: 带数量主张应仍走改单解析，实际 {_r60['mode']}"
 
+    # ---- C-5：查询日志的「运行期开关 / 单行转义 / 属性覆盖」----
+    from agent import _query_log_on
+    _prev_env = os.environ.get("OU_QUERY_LOG")
+    _prev_flag = _agent_mod._QUERY_LOG
+    # 场景61：同一进程内改环境变量立即生效（旧实现 import 期求值，运行期改 env 无效）
+    try:
+        _agent_mod._QUERY_LOG = None            # 哨兵：跟随环境变量
+        os.environ["OU_QUERY_LOG"] = "1"
+        _b61 = io.StringIO()
+        with contextlib.redirect_stdout(_b61):
+            query("温州机电 法兰盘 到哪了", store)
+        assert "[QUERY]" in _b61.getvalue(), f"C-5: env=1 应输出链路: {_b61.getvalue()!r}"
+        os.environ["OU_QUERY_LOG"] = "0"
+        _b61b = io.StringIO()
+        with contextlib.redirect_stdout(_b61b):
+            query("温州机电 法兰盘 到哪了", store)
+        assert _b61b.getvalue() == "", \
+            f"C-5: 同进程改 env=0 应立即静音: {_b61b.getvalue()!r}"
+        assert _query_log_on() is False, "C-5: 开关判定应实时读环境变量"
+
+        # 场景62：问题里的换行/引号必须转义成单行（链路日志要「一行可讲解」）
+        _agent_mod._QUERY_LOG = True
+        _b62 = io.StringIO()
+        with contextlib.redirect_stdout(_b62):
+            query('法兰盘 到哪了\n第二行 "引号"', store)
+        _log62 = _b62.getvalue()
+        assert _log62.count("\n") == 1, f"C-5: 日志必须单行: {_log62!r}"
+        assert "\\n" in _log62, f"C-5: 换行应转义成字面 \\n: {_log62!r}"
+        assert _log62.startswith("[QUERY] q="), f"C-5: q 段格式被破坏: {_log62!r}"
+        assert "命中键=" in _log62 and _log62.rstrip().endswith("ms"), \
+            f"C-5: q 不得吃掉后续字段: {_log62!r}"
+        _b62b = io.StringIO()
+        with contextlib.redirect_stdout(_b62b):
+            query("法兰盘 " + "很长的补充说明" * 30, store)
+        assert len(_b62b.getvalue()) < 300, \
+            f"C-5: 超长问题应截断: len={len(_b62b.getvalue())}"
+
+        # 场景63：显式置位优先于环境变量（保住场景 53/55 的既有写法，也方便演示临时开）
+        os.environ["OU_QUERY_LOG"] = "1"
+        _agent_mod._QUERY_LOG = False
+        _b63 = io.StringIO()
+        with contextlib.redirect_stdout(_b63):
+            query("温州机电 法兰盘 到哪了", store)
+        assert _b63.getvalue() == "", \
+            f"C-5: 属性 False 应压过 env=1: {_b63.getvalue()!r}"
+    finally:
+        _agent_mod._QUERY_LOG = _prev_flag
+        if _prev_env is None:
+            os.environ.pop("OU_QUERY_LOG", None)
+        else:
+            os.environ["OU_QUERY_LOG"] = _prev_env
+
+    # ---- C-6：指代词补温州话常用说法 ----
+    # 场景64：纯函数——「那批货 / 上一单」算指代，「其它/其他」不算
+    for _p64 in ("那批货到哪了", "这批货呢", "上一单什么状态", "上一个单"):
+        assert _agent_mod._has_pronoun(_p64), f"C-6: 应识别为指代词: {_p64}"
+    assert not _agent_mod._has_pronoun("其它单子呢"), "C-6: 「其它」不得当成指代"
+    assert not _agent_mod._has_pronoun("其他客户"), "C-6: 「其他」不得当成指代"
+
+    # 场景65：端到端——「法兰盘那单」之后再说「那批货」仍锁定同一单
+    reset_session_ctx()
+    store.reset()
+    parse_chat("dummy", store, mock=[
+        {"type": "order", "customer": "温州机电", "product": "法兰盘", "qty": 300,
+         "delivery_date": "2026-12-01", "source_excerpt": "法兰盘 300 个"},
+        {"type": "order", "customer": "瑞安五金", "product": "螺栓", "qty": 800,
+         "delivery_date": "2026-12-05", "source_excerpt": "螺栓 800 个"},
+    ])
+    handle_message("法兰盘那单到哪了", store, session_key="t65")
+    _r65 = handle_message("那批货到哪了", store, session_key="t65")
+    assert "法兰盘" in _r65["reply"] and "螺栓" not in _r65["reply"], \
+        f"C-6: 「那批货」应锁定上一轮那单: {_r65['reply']!r}"
+
+    # ---- C-7：实体匹配单一口径（query 打分与 scope 判定同源）----
+    # 场景66：泛词前缀（客户A/客户B）不再被判成显式实体；两处判定恒等
+    _s66 = Store()
+    _s66.reset()
+    _s66.add_order({"order_id": "ORD-T66-01", "customer": "客户A", "product": "垫片",
+                    "qty": 10, "status": "沟通中", "created_at": "2026-10-01",
+                    "updated_at": "2026-10-01", "source_excerpt": "垫片 10 个"})
+    assert _agent_mod._has_explicit_entity("客户B", _s66) is False, \
+        "C-7: 泛词前缀（客户*）不得算显式实体（旧口径会误判 True）"
+    assert _agent_mod._has_explicit_entity("客户A", _s66) is True, \
+        "C-7: 全名命中应算显式实体"
+    for _q66 in ("客户A 到哪了", "那单温州那边催了吗", "垫片 到哪了", "xyz123无匹配词"):
+        assert _agent_mod._has_explicit_entity(_q66, _s66) == \
+            any(_agent_mod._entity_hits(_q66, o) for o in _s66.orders), \
+            f"C-7: scope 判定与 query 打分必须同源（漂移即回归）: {_q66}"
+
+    # 场景67：保守方向不变量——2 字前缀（温州*）误判成有实体时，宁可澄清也不静默串台
+    # （任务单 C-7 声称能修好这条误判，实测不成立；此断言守的是「不会答错客户」这个底线，
+    #   将来若做 C-7b 唯一性降级，这条断言仍然要成立）
+    _s67 = Store()
+    _s67.reset()
+    reset_session_ctx()
+    _s67.add_order({"order_id": "ORD-T67-01", "customer": "温州机电", "product": "法兰盘",
+                    "qty": 300, "status": "沟通中", "delivery_date": "2026-12-01",
+                    "created_at": "2026-10-01", "updated_at": "2026-10-01",
+                    "source_excerpt": "法兰盘 300 个"})
+    _s67.add_order({"order_id": "ORD-T67-02", "customer": "温州阀门", "product": "球阀",
+                    "qty": 50, "status": "沟通中", "delivery_date": "2026-12-10",
+                    "created_at": "2026-10-01", "updated_at": "2026-10-01",
+                    "source_excerpt": "球阀 50 个"})
+    handle_message("温州机电 法兰盘 到哪了", _s67, session_key="t67")
+    _r67 = handle_message("那单温州那边催了吗", _s67, session_key="t67")
+    assert not ("温州阀门" in _r67["reply"] and "温州机电" not in _r67["reply"]), \
+        f"C-7: 2 字前缀误判时不得静默答成另一客户: {_r67['reply']!r}"
+
+    # ---- C-8：scope + 状态追问给结论（不再只甩一张卡片让用户反推）----
+    # 场景68：单笔、当前不是该状态 → 明确说「不是」，并仍带卡片
+    _s68 = Store()
+    _s68.reset()
+    reset_session_ctx()
+    _s68.add_order({"order_id": "ORD-T68-01", "customer": "温州机电", "product": "法兰盘",
+                    "qty": 300, "status": "沟通中", "delivery_date": "2026-12-01",
+                    "created_at": "2026-10-01", "updated_at": "2026-10-01",
+                    "source_excerpt": "法兰盘 300 个"})
+    handle_message("法兰盘那单到哪了", _s68, session_key="t68a")
+    _r68 = handle_message("那单取消了吗", _s68, session_key="t68a")
+    assert "不是「已取消」" in _r68["reply"], f"C-8: 应给否定结论: {_r68['reply']!r}"
+    assert "沟通中" in _r68["reply"], f"C-8: 结论应带出真实状态: {_r68['reply']!r}"
+    assert "🔎" in _r68["reply"], f"C-8: 结论要有可辨识标记: {_r68['reply']!r}"
+    assert "上一轮" in _r68["reply"], \
+        f"C-8: 结论之后仍要给卡片（不是只回一句）: {_r68['reply']!r}"
+
+    # 场景69：真的已取消 → 不再输出否定结论（同一结论不说两遍）
+    _s69 = Store()
+    _s69.reset()
+    reset_session_ctx()
+    _s69.add_order({"order_id": "ORD-T69-01", "customer": "温州机电", "product": "法兰盘",
+                    "qty": 300, "status": "已取消", "delivery_date": "2026-12-01",
+                    "created_at": "2026-10-01", "updated_at": "2026-10-01",
+                    "source_excerpt": "法兰盘 300 个"})
+    handle_message("法兰盘那单到哪了", _s69, session_key="t69")
+    _r69 = handle_message("那单取消了吗", _s69, session_key="t69")
+    assert "不是「已取消」" not in _r69["reply"], \
+        f"C-8: 命中时不得再给否定结论: {_r69['reply']!r}"
+    assert "已取消" in _r69["reply"], f"C-8: 卡片应显示已取消: {_r69['reply']!r}"
+
+    # 场景70：澄清出口也要带结论（verdict 不能只在正常分支生效）
+    _s70 = Store()
+    _s70.reset()
+    reset_session_ctx()
+    _s70.add_order({"order_id": "ORD-T70-01", "customer": "温州机电", "product": "法兰盘",
+                    "qty": 300, "status": "沟通中", "delivery_date": "2026-12-01",
+                    "created_at": "2026-10-01", "updated_at": "2026-10-01",
+                    "source_excerpt": "法兰盘 300 个"})
+    _s70.add_order({"order_id": "ORD-T70-02", "customer": "温州机电", "product": "阀体",
+                    "qty": 200, "status": "生产中", "delivery_date": "2026-12-15",
+                    "created_at": "2026-10-01", "updated_at": "2026-10-01",
+                    "source_excerpt": "阀体 200 个"})
+    _r70a = handle_message("温州机电 到哪了", _s70, session_key="t70")
+    assert "请补充产品名" in _r70a["reply"], f"C-8 前置：首轮应澄清: {_r70a['reply']!r}"
+    _r70 = handle_message("那单都取消了吗", _s70, session_key="t70")
+    assert "不是「已取消」" in _r70["reply"], \
+        f"C-8: 澄清出口也必须带结论: {_r70['reply']!r}"
+    assert "就是这 2 单" in _r70["reply"], \
+        f"C-8: 澄清话术不得被结论顶掉: {_r70['reply']!r}"
+    assert "现在分别是" in _r70["reply"], \
+        f"C-8: 多单结论应逐单列状态: {_r70['reply']!r}"
+
+    # ---- C-9：查询词表提模块级 + 补漏 ----
+    # 场景71：新词进表；且问「交付时间」不再被当成状态=已交付（旧口径只返回已交付那单）
+    for _k71 in ("交付时间", "货期", "几时交", "什么时候发", "什么时候送到"):
+        assert _k71 in _agent_mod._DATE_FIELD_MARKERS, f"C-9: 交期词表缺「{_k71}」"
+    _s71 = Store()
+    _s71.reset()
+    _s71.add_order({"order_id": "ORD-T71-01", "customer": "客户A", "product": "垫片",
+                    "qty": 10, "status": "生产中", "delivery_date": "2026-12-01",
+                    "created_at": "2026-10-01", "updated_at": "2026-10-01",
+                    "source_excerpt": "垫片 10 个"})
+    _s71.add_order({"order_id": "ORD-T71-02", "customer": "客户C", "product": "垫片",
+                    "qty": 20, "status": "已交付", "delivery_date": "2026-10-01",
+                    "created_at": "2026-10-01", "updated_at": "2026-10-01",
+                    "source_excerpt": "垫片 20 个"})
+    _ans71 = query("交付时间是什么", _s71)
+    assert "客户A" in _ans71 and "客户C" not in _ans71, \
+        f"C-9: 问「交付时间」不得被当成状态筛选=已交付: {_ans71!r}"
+
     print("ALL TESTS PASSED ✅")
     print("-" * 40)
     print(b)
@@ -619,7 +798,7 @@ def smoke():
     """P0-4 快速回归集（python test_module4.py --smoke）：守关键链路，秒级跑完。
 
 
-    与 golden（全量 60 场景）不同，smoke 只覆盖最容易回归的核心路径，
+    与 golden（全量 71 场景）不同，smoke 只覆盖最容易回归的核心路径，
     改动 query()/_colloquialize()/prompt 或卡片后，先跑这个再跑全量。
     """
     import time
@@ -768,7 +947,51 @@ def smoke():
     assert _r15["mode"] == "query" and "变更履历" in _r15["reply"], \
         f"C-4: 历史追问必须走查询并出履历: {_r15}"
 
-    print(f"SMOKE TESTS PASSED ✅（{time.time() - t0:.2f}s，16 个检查点）")
+    # ⑯ C-8：scope + 状态追问给结论（独占 session_key，别被 ⑭⑮ 的默认会话带跑）
+    store.reset()
+    _agent_mod.reset_session_ctx()
+    store.add_order({"order_id": "ORD-SM-08", "customer": "温州机电", "product": "法兰盘",
+                     "qty": 300, "status": "沟通中", "delivery_date": "2026-12-01",
+                     "created_at": "2026-10-01", "updated_at": "2026-10-01",
+                     "source_excerpt": "法兰盘 300 个"})
+    _hm("法兰盘那单到哪了", store, session_key="smoke8")
+    _r16 = _hm("那单取消了吗", store, session_key="smoke8")
+    assert "不是「已取消」" in _r16["reply"] and "沟通中" in _r16["reply"], \
+        f"C-8: 状态追问应给结论: {_r16['reply']!r}"
+
+    # ⑰ C-5/C-6/C-7 快检：日志运行期开关 / 指代补词 / 泛词前缀不算显式实体
+    import io as _io
+    import contextlib as _ct
+    _env_bak = os.environ.get("OU_QUERY_LOG")
+    _flag_bak = _agent_mod._QUERY_LOG
+    try:
+        _agent_mod._QUERY_LOG = None
+        os.environ["OU_QUERY_LOG"] = "1"
+        _b17 = _io.StringIO()
+        with _ct.redirect_stdout(_b17):
+            query("法兰盘 到哪了", store)
+        assert "[QUERY]" in _b17.getvalue(), "C-5: 运行期开日志应出链路"
+        os.environ["OU_QUERY_LOG"] = "0"
+        _b17b = _io.StringIO()
+        with _ct.redirect_stdout(_b17b):
+            query("法兰盘 到哪了", store)
+        assert _b17b.getvalue() == "", "C-5: 运行期关日志应立即静音"
+    finally:
+        _agent_mod._QUERY_LOG = _flag_bak
+        if _env_bak is None:
+            os.environ.pop("OU_QUERY_LOG", None)
+        else:
+            os.environ["OU_QUERY_LOG"] = _env_bak
+    assert _agent_mod._has_pronoun("那批货到哪了"), "C-6: 应识别「那批货」"
+    _s17 = Store()
+    _s17.reset()
+    _s17.add_order({"order_id": "ORD-SM-09", "customer": "客户A", "product": "垫片",
+                    "qty": 10, "status": "沟通中", "created_at": "2026-10-01",
+                    "updated_at": "2026-10-01", "source_excerpt": "垫片 10 个"})
+    assert _agent_mod._has_explicit_entity("客户B", _s17) is False, \
+        "C-7: 泛词前缀不得算显式实体"
+
+    print(f"SMOKE TESTS PASSED ✅（{time.time() - t0:.2f}s，17 个检查点）")
 
 
 if __name__ == "__main__":
@@ -776,7 +999,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(
         description="模块四查询应答自测（三层：golden 全量 / smoke 快速 / failures 收集）")
 
-    ap.add_argument("--smoke", action="store_true", help="只跑快速回归集（秒级），默认跑全量 60 场景")
+    ap.add_argument("--smoke", action="store_true", help="只跑快速回归集（秒级），默认跑全量 71 场景")
     args = ap.parse_args()
     if args.smoke:
         smoke()

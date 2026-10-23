@@ -2,6 +2,7 @@
 import datetime
 import os
 import re
+import threading
 import time
 
 from llm import LLM
@@ -134,7 +135,12 @@ def _days_to(date_str):
 _SESSION_CTX = {}      # {session_key: {"order_ids": [...], "ts": time.time()}}
 _CTX_TTL = 600         # 秒；过期即失效，指代词回退全表匹配
 _CTX_MAX = 500         # C-2：上限，防止大量一次性 session_key 常驻内存（无主动回收路径）
-_PRONOUNS = ("那单", "这单", "这一单", "那一单", "刚才那单", "刚才的单", "刚刚那单")
+# C-6：补温州话常用说法（那批货 / 上一单）。刻意不加裸「那批」——「法兰那批的货」里
+# 它是量词不是指代，加了会让改单话术误触发范围锁定。
+_PRONOUNS = ("刚才那单", "刚才的单", "刚刚那单", "这一单", "那一单", "上一个单",
+             "那批货", "这批货", "上一单", "那单", "这单")
+# 泛词前缀（「客户A / 公司B」）：2 字前缀会把不同客户串在一起，故降级为 3 字
+_GENERIC_PREFIXES = ("客户", "公司", "厂家", "老板", "经理")
 
 
 def reset_session_ctx(session_key: str = None):
@@ -152,24 +158,40 @@ def _has_pronoun(q: str) -> bool:
     return "它" in q and "其它" not in q and "其他" not in q
 
 
+def _entity_hits(q: str, order: dict) -> set:
+    """单张单对这句话的实体命中（客户 / 产品 / 规格）。
+
+    C-7：query 的候选打分与 scope 的「有没有显式实体」判定共用这一份口径。
+    此前两处各写一套（前缀长度规则不一致），必然漂移——一处改了另一处不知道。
+    返回新 set，调用方可安全 `add` 状态/时间等命中。
+    """
+    hits = set()
+    cust = order.get("customer") or ""
+    if cust:
+        if cust in q:
+            hits.add("客户")
+        else:
+            # 泛词前缀降级为 3 字，避免「客户A / 客户B」互相误命中
+            n = 3 if cust[:2] in _GENERIC_PREFIXES else 2
+            if len(cust) >= n and cust[:n] in q:
+                hits.add("客户")
+    prod = order.get("product") or ""
+    if prod and (prod in q or any(prod[i:i + 3] in q for i in range(len(prod) - 2))):
+        hits.add("产品")
+    spec = order.get("spec") or ""
+    if spec and len(spec) >= 2 and spec in q:
+        hits.add("规格")
+    return hits
+
+
 def _has_explicit_entity(q: str, store: Store) -> bool:
     """这句里是否自带可定位实体（客户全名/前缀、产品名/3字片段、规格）。
 
     有实体时必须走全表匹配，不能被上一轮的范围锁死：
     例如先问「温州机电」再问「万博那单到哪了」，若走范围就会答成温州机电（串台）。
+    C-7：判定口径与 query 的候选打分完全一致（_entity_hits）。
     """
-    for o in store.orders:
-        cust = o.get("customer") or ""
-        prod = o.get("product") or ""
-        spec = o.get("spec") or ""
-        if cust and (cust in q or (len(cust) >= 2 and cust[:2] in q)):
-            return True
-        if prod and (prod in q
-                     or any(prod[i:i + 3] in q for i in range(len(prod) - 2))):
-            return True
-        if spec and len(spec) >= 2 and spec in q:
-            return True
-    return False
+    return any(_entity_hits(q, o) for o in store.orders)
 
 
 def _resolve_scope(q: str, store: Store, session_key: str):
@@ -209,24 +231,53 @@ def _remember_ctx(session_key: str, trace: dict):
     _SESSION_CTX[session_key] = {"order_ids": list(ids), "ts": time.time()}
 
 
-# ---- C-3：查询链路日志（默认关，OU_QUERY_LOG=1 开启；只用标准库 print）----
-_QUERY_LOG = os.getenv("OU_QUERY_LOG", "").lower() in ("1", "true", "yes", "on")
+# ---- C-3/C-5：查询链路日志（默认关，OU_QUERY_LOG=1 开启；只用标准库 print）----
+# C-5：改为「哨兵」而非 import 期求值——None 表示跟随环境变量（运行期改 env 立即生效，
+# 演示时不必重启进程）；True/False 表示显式覆盖，保留给测试/演示临时置位。
+_QUERY_LOG = None
+_QLOG_LOCK = threading.Lock()   # 整行原子写出，避免与 ThreadingHTTPServer 的半行交错
+
+
+def _query_log_on() -> bool:
+    """当前是否输出链路日志（显式覆盖优先，否则读环境变量）。"""
+    if _QUERY_LOG is not None:
+        return bool(_QUERY_LOG)
+    return os.getenv("OU_QUERY_LOG", "").lower() in ("1", "true", "yes", "on")
+
+
+def _qlog_q(value, limit: int = 40) -> str:
+    """问题文本的单行化：先截原串再 repr。
+
+    顺序不能反——`repr(s)[:80]` 会把 `\\n` 这类转义序列截成半个反斜杠，
+    虽然不破行但会输出坏字符；先截再 repr 一定拿到完整转义。
+    """
+    s = str(value or "")
+    if len(s) > limit:
+        s = s[:limit] + "…"
+    return repr(s)
 
 
 def _qlog(meta: dict):
     """输出一行可讲解的查询链路（命中键 / 命中单数 / 是否澄清 / 状态筛选 / 耗时）。"""
-    parts = [f'[QUERY] q="{meta.get("q", "")}"',
-             f'命中键={meta.get("hits") or "无"}',
-             f'命中 {meta.get("n", 0)} 单',
-             (f'澄清=是（输出前 {meta.get("n", 0)} 个候选）' if meta.get("clarify")
-              else "澄清=否"),
-             f'状态筛选={meta.get("status") or "无"}',
-             f'耗时={meta.get("ms", 0.0):.1f}ms']
+    q = _qlog_q(meta.get("q", ""))
+    hits = meta.get("hits") or "无"
+    n = meta.get("n", 0)
+    status = meta.get("status") or "无"
+    ms = float(meta.get("ms") or 0.0)     # None 也不炸：关日志时更不该因日志抛错
+    parts = [f"[QUERY] q={q}",
+             f"命中键={hits}",
+             f"命中 {n} 单",
+             (f"澄清=是（输出前 {n} 个候选）" if meta.get("clarify") else "澄清=否"),
+             f"状态筛选={status}",
+             f"耗时={ms:.1f}ms"]
     if meta.get("scope"):
         parts.insert(2, "范围=上一轮命中")
-    if meta.get("mode") not in (None, "orders"):
-        parts.insert(1, f'分支={meta["mode"]}')
-    print(" | ".join(parts))
+    mode = meta.get("mode")
+    if mode not in (None, "orders"):
+        parts.insert(1, f"分支={mode}")
+    line = " | ".join(parts)
+    with _QLOG_LOCK:
+        print(line, flush=True)
 
 
 def query(question, store: Store, llm: LLM = None, scope=None, trace=None):
@@ -242,7 +293,7 @@ def query(question, store: Store, llm: LLM = None, scope=None, trace=None):
     meta["ms"] = (time.time() - t0) * 1000
     if trace is not None:
         trace.update(meta)
-    if _QUERY_LOG:
+    if _query_log_on():
         _qlog(meta)
     return text
 
@@ -261,26 +312,15 @@ def _query_body(question, store: Store, llm: LLM = None, scope=None, meta=None):
     is_history_query = any(k in q for k in _HISTORY_MARKERS)
 
     # ---- 模块四·1：查询解析增强（命中键 客户/产品/规格/状态 + 时间区间 + 相关度排序）----
-    # 1. 状态关键词映射
-    status_keywords = {
-        "沟通中": ["沟通中", "待报价", "刚下单", "新单"],
-        "已报价": ["已报价", "报过价", "报价"],
-        "已确认": ["已确认", "确认了", "下单了"],
-        "生产中": ["生产中", "在生产", "排产", "做货", "在做"],
-        "已交付": ["已交付", "已发货", "发了", "送了", "交付"],
-        "部分交付": ["部分交付", "分批", "分两批", "交了一部分", "出了一批"],
-        "已取消": ["已取消", "取消了", "取消订单", "作废", "不要了"],
-    }
+    # 1. 状态关键词映射（C-9：词表提到模块级，可被测试直接断言，也不再来回漂移）
     target_status = None
-    for st, kws in status_keywords.items():
+    for st, kws in _STATUS_KEYWORDS.items():
         if any(k in q for k in kws):
             target_status = st
             break
 
     # 问的是「交期这个字段」而不是「已交付这个状态」：避免「那单的交付日期呢」被当成
     # 状态筛选=已交付，导致指代追问落空（同时让 C-3 的链路日志不再误导）。
-    _DATE_FIELD_MARKERS = ("交付日期", "交货日期", "交期", "交期是", "什么时候交",
-                           "几号交", "哪天交", "何时交", "什么时候到")
     if any(k in q for k in _DATE_FIELD_MARKERS):
         target_status = None
 
@@ -288,35 +328,10 @@ def _query_body(question, store: Store, llm: LLM = None, scope=None, meta=None):
     date_range = _parse_date_range(q)
 
     # 3. 多字段命中：客户 / 产品 / 规格；每单计算命中字段集合，按命中数排序
+    # C-7：实体部分统一走 _entity_hits（与 scope 判定同一口径），此处只补状态/时间
     candidates = []  # (order, hit_fields:set)
     for o in orders:
-        hits = set()
-        cust = o.get("customer") or ""
-        prod = o.get("product") or ""
-        spec = o.get("spec") or ""
-        # 客户名匹配：全名 / 前2字前缀（但排除"客户/公司/厂家"等泛词前缀，避免"客户A/B/C"互相误命中）
-        if cust:
-            if cust in q:
-                hits.add("客户")
-            else:
-                # 前2字前缀匹配，泛词前缀降级为前3字
-                _GENERIC_PREFIXES = ("客户", "公司", "厂家", "老板", "经理")
-                prefix_len = 3 if cust[:2] in _GENERIC_PREFIXES else 2
-                if len(cust) >= prefix_len and cust[:prefix_len] in q:
-                    hits.add("客户")
-        # 产品名匹配：全名 / 任一≥2字片段（产品名常带型号，如 NMX-60）
-        if prod:
-            if prod in q:
-                hits.add("产品")
-            else:
-                # 滑窗匹配产品名中长度≥3的子串（防短词误命中）
-                for i in range(len(prod) - 2):
-                    if prod[i:i+3] in q:
-                        hits.add("产品")
-                        break
-        # 规格匹配：仅当规格非空且≥2字
-        if spec and len(spec) >= 2 and spec in q:
-            hits.add("规格")
+        hits = _entity_hits(q, o)
         # 状态命中
         if target_status and o.get("status") == target_status:
             hits.add("状态")
@@ -332,6 +347,9 @@ def _query_body(question, store: Store, llm: LLM = None, scope=None, meta=None):
     # 4. 无任何命中 → 兜底返回全部在途（保留原引导语义）
     # C-2 例外：指代追问（scope 非空）但这句话没带任何可匹配字段（如「那单的交付日期呢」），
     # 语义是「就刚才那几单，换个字段再说一遍」，应把上一轮的单原样带出，而不是落兜底。
+    # C-8：scope + 状态追问先给是/否结论（「那单取消了吗」不能只甩一张卡片让用户自己反推）。
+    # 判据用 orders（=scope）而非 candidates，与候选流解耦，澄清/正常两条出口都能带上。
+    status_verdict = _status_verdict(target_status, orders) if scope else ""
     if not candidates and scope:
         candidates = [(o, {"上一轮"}) for o in orders]
     if not candidates:
@@ -393,7 +411,7 @@ def _query_body(question, store: Store, llm: LLM = None, scope=None, meta=None):
         for i, (o, _) in enumerate(candidates[:top_n], 1):
             lines.append(f"{i}. {o['order_id']} {o['customer']}/{o['product']}"
                          f"（状态{o.get('status')}，交期{o.get('delivery_date') or '待定'}）")
-        return "\n".join(lines)
+        return status_verdict + "\n".join(lines)
 
     lines = []
     for o, hits in candidates:
@@ -401,7 +419,27 @@ def _query_body(question, store: Store, llm: LLM = None, scope=None, meta=None):
         sug = _suggest(o)
         line = f"[命中：{tag}] " + _highlight_query_text(o, sug)
         lines.append(line)
-    return prefix + "\n".join(lines)
+    return prefix + status_verdict + "\n".join(lines)
+
+
+def _status_verdict(target_status, order_list) -> str:
+    """C-8：scope 内被问某个状态、但没一单是该状态时，先给一句明确结论。
+
+    背景：「那单取消了吗」在上一轮范围里筛不到「已取消」，原先只甩一张卡片，
+    要用户自己从状态标签反推「没取消」，答非所问。命中时不输出——卡片里的状态
+    本身就是答案，同一结论说两遍反而啰嗦。
+    措辞刻意避开「当前状态」四字：澄清路径有「不展开明细」的断言拿它当排除词。
+    """
+    if not target_status or not order_list:
+        return ""
+    if any((o.get("status") or "") == target_status for o in order_list):
+        return ""
+    if len(order_list) == 1:
+        o = order_list[0]
+        return (f"🔎 不是「{target_status}」——{o.get('customer')}的{o.get('product')}"
+                f"现在是「{o.get('status') or '未知'}」。\n")
+    curs = "、".join(dict.fromkeys(f"「{o.get('status') or '未知'}」" for o in order_list))
+    return f"🔎 这 {len(order_list)} 单都不是「{target_status}」，现在分别是{curs}。\n"
 
 
 def _suggest(o: dict) -> str:
@@ -677,6 +715,30 @@ _BRIEFING_MARKERS = ("简报", "今天情况", "今日", "整体情况", "汇总
 # 先按历史意图分流，否则「改过啥」里的「改」会被 contracts.CHANGE_VERBS 判成改单指令。
 _HISTORY_MARKERS = ("改过", "历史", "变更", "履历", "几次", "改了什么", "改了啥",
                     "变更记录", "变更历史", "改动", "修改记录", "怎么改的")
+
+# ---- C-9：查询词表统一放模块级（原先散在 _query_body 里当局部变量，测试断不到，
+# 也无法和 _QUERY_MARKERS 一起维护）----
+_STATUS_KEYWORDS = {
+    "沟通中": ["沟通中", "待报价", "刚下单", "新单"],
+    "已报价": ["已报价", "报过价", "报价"],
+    "已确认": ["已确认", "确认了", "下单了"],
+    "生产中": ["生产中", "在生产", "排产", "做货", "在做"],
+    "已交付": ["已交付", "已发货", "发了", "送了", "交付"],
+    "部分交付": ["部分交付", "分批", "分两批", "交了一部分", "出了一批"],
+    # C-8：补问句形态。「取消了吗」这类追问必须能识别成「问已取消」，
+    # 否则 scope 追问进不了结论分支；但**不加裸「取消」**——CHANGE_VERBS 不含「取消」，
+    # 「那单先取消吧」会走查询分支，加了会把它答成「不是已取消」的错结论。
+    "已取消": ["已取消", "取消了", "取消订单", "作废", "不要了",
+               "取消了吗", "取消没", "取消没有", "取消了没", "是不是取消"],
+}
+
+# 问的是「交期这个字段」而不是「已交付这个状态」：避免「那单的交付日期呢」被当成
+# 状态筛选=已交付，导致指代追问落空（同时让 C-3 的链路日志不再误导）。
+# C-9 补漏：交付时间（含「交付」二字，真的会被误判成已交付）、货期、几时交、
+# 什么时候发 / 什么时候送到；冗余的「交期是」已被「交期」覆盖，删掉。
+_DATE_FIELD_MARKERS = ("交付日期", "交货日期", "交付时间", "交期",
+                       "什么时候交", "几时交", "几号交", "哪天交", "何时交",
+                       "什么时候到", "什么时候发", "什么时候送到", "货期")
 
 
 # 订单/改单意图优先判定：含变更动词或明确的数量/价格数值主张时，即便夹带

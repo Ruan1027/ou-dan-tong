@@ -118,10 +118,76 @@ def _fuzzy_eq(a: str, b: str) -> bool:
     if len(short) >= 2 and short in long:
         return True
     # 2) 共享 ≥4 字核心片段（覆盖口语包裹 / 语序颠倒）
+    # 快筛：两串无任何公共字符必然无公共子串，直接短路，省掉 O(n*m) DP
+    if not (set(a) & set(b)):
+        return False
     common = _longest_common_substring(a, b)
     if len(common) >= 4:
         return True
     return False
+
+
+# ----------------------------------------------------------------------
+# D-1 批次交期有效性解析（分批交期语义的单一解释口径）
+# D-3：提为模块级纯函数（不依赖 Store 实例），模块二 validator / 模块五查询
+#      简报可直接 from store import effective_delivery_date, _valid_batches 复用
+# ----------------------------------------------------------------------
+def _parse_batch(b):
+    """单条批次合法性校验。返回 (规范化条目, None) 或 (None, 原因)。
+
+    D-5：date 用 datetime.date.fromisoformat 真实解析（能拦住 2026-13-01
+    这类「格式像但日历上不存在」的日期），而非只查字符串形状。
+    """
+    if not isinstance(b, dict):
+        return None, "条目不是对象"
+    q, dt = b.get("qty"), b.get("date")
+    qi = q if isinstance(q, int) and not isinstance(q, bool) else None
+    if qi is None or qi < 0:
+        return None, f"qty「{q}」不是非负整数"
+    if not isinstance(dt, str) or len(dt) != 10:
+        return None, f"date「{dt}」不是 YYYY-MM-DD 字符串"
+    try:
+        datetime.date.fromisoformat(dt)
+    except ValueError:
+        return None, f"date「{dt}」不是真实存在的日期"
+    return {"qty": qi, "date": dt}, None
+
+
+def _valid_batches(order: dict):
+    """取批次列表里的合法条目（qty 为非负整数、date 为真实存在的 YYYY-MM-DD）。"""
+    batches = order.get("delivery_batches") or []
+    out = []
+    if isinstance(batches, list):
+        for b in batches:
+            clean, _ = _parse_batch(b)
+            if clean is not None:
+                out.append(clean)
+    return out
+
+
+def _invalid_batches(order: dict):
+    """D-4 诊断口径：返回被跳过的非法批次条目 [(索引, 原始条目, 原因)]。"""
+    batches = order.get("delivery_batches") or []
+    bad = []
+    if isinstance(batches, list):
+        for i, b in enumerate(batches):
+            _, reason = _parse_batch(b)
+            if reason:
+                bad.append((i, b, reason))
+    return bad
+
+
+def effective_delivery_date(order: dict):
+    """返回该单真正该交付的日期（D-3 模块级纯函数，模块二冲突比对请用此口径）。
+
+    - 有 delivery_batches：返回所有批次里最晚的日期（全部批次交完才算交完）
+    - 无批次（或批次全部非法）：回退 order["delivery_date"]
+    - 都没有：返回 None
+    """
+    batches = _valid_batches(order)
+    if batches:
+        return max(b["date"] for b in batches)
+    return order.get("delivery_date") or None
 
 
 class Store:
@@ -191,6 +257,9 @@ class Store:
         o.setdefault("qty", None)
         o.setdefault("unit_price", "待报价")
         o.setdefault("delivery_date", None)
+        # 追加单标记：parent_order_id 指向被追加的原单，is_append=True
+        o.setdefault("parent_order_id", None)
+        o.setdefault("is_append", False)
         raw_status = o.get("status")
         st = normalize_status(raw_status)
         if raw_status == PLACEHOLDER_STATUS:
@@ -258,15 +327,18 @@ class Store:
         if not (customer or "").strip() or not (product or "").strip():
             return None
         # 1) 精确匹配（mock / 正式名称场景，行为与原版完全一致）
+        #    已交付的单不再参与匹配：交付完后再来的货按新建订单处理（用户 2026-10-23 规则③）。
+        #    已取消的单**仍参与匹配**——保持 BUG-11 引入的既有行为，避免动 test_pipeline T12。
+        _CLOSED = ("已交付",)
         for o in self.orders:
             if o.get("customer") == customer and o.get("product") == product \
-                    and o.get("status") not in ("已交付",):
+                    and o.get("status") not in _CLOSED:
                 return o
         # 2) 简称模糊匹配（真实模式口语常只说简称：
         #    「王工」↔「王工（XX电气）」、「NMX-60」↔「NMX-60 断路器外壳」）
         if customer and product:
             for o in self.orders:
-                if o.get("status") in ("已交付",):
+                if o.get("status") in _CLOSED:
                     continue
                 oc, op = (o.get("customer") or "").strip(), (o.get("product") or "").strip()
                 if _fuzzy_eq(oc, customer) and _fuzzy_eq(op, product):
@@ -274,13 +346,81 @@ class Store:
         return None
 
     # ------------------------------------------------------------------
+    # D-1 批次交期有效性解析（分批交期语义的单一解释口径）
+    # ------------------------------------------------------------------
+    def effective_delivery_date(self, order: dict):
+        """委托模块级纯函数（D-3）：保留方法形式，向下兼容既有调用点。"""
+        return effective_delivery_date(order)
+
+    def batch_summary(self, order: dict, as_of: str = None) -> dict:
+        """批次汇总（D-2 语义拆分：区分「计划排满」与「真的交完了」）。
+
+        - planned：批次计划总量之和；shipped：日期已到（<= as_of）的批次量之和
+        - plan_complete：计划量排满 qty（只看计划，与时间无关）
+        - done：计划排满 且 最晚批次日期已到 —— 修复旧版「未来批次也算交完」
+        - last_date / next_date：最晚批次日 / 下一个未到期批次日（无则 None）
+        - as_of：统计基准日，默认今天（测试与回放场景可显式传入）
+        """
+        today = as_of or datetime.date.today().strftime("%Y-%m-%d")
+        qty = order.get("qty")
+        total = qty if isinstance(qty, int) and not isinstance(qty, bool) else 0
+        batches = _valid_batches(order)
+        if not batches:
+            return {"has_batches": False, "planned": 0, "shipped": 0, "total": total,
+                    "plan_complete": False, "done": False,
+                    "last_date": None, "next_date": None}
+        planned = sum(b["qty"] for b in batches)
+        dates = [b["date"] for b in batches]
+        last_date = max(dates)
+        plan_complete = bool(total and planned >= total)
+        return {"has_batches": True,
+                "planned": planned,
+                "shipped": sum(b["qty"] for b in batches if b["date"] <= today),
+                "total": total,
+                "plan_complete": plan_complete,
+                "done": bool(plan_complete and last_date <= today),
+                "last_date": last_date,
+                "next_date": min((d for d in dates if d > today), default=None)}
+
+    def _batch_consistency_msgs(self, order: dict):
+        """D-2 批次一致性检查——integrity_check 与 repair 共用的唯一口径（防两处漂移）。
+
+        返回 (level, 消息) 列表；空列表 = 批次数据自洽。
+        """
+        raw = order.get("delivery_batches")
+        if not (isinstance(raw, list) and raw):
+            if raw not in (None, []):
+                return [("error", f"delivery_batches「{raw}」不是批次列表")]
+            return []
+        msgs = []
+        # D-4：先报告被跳过的非法批次条目（可诊断，不再静默吞掉）
+        for i, raw_b, reason in _invalid_batches(order):
+            msgs.append(("warn", f"delivery_batches 第 {i + 1} 条（{raw_b}）非法已跳过：{reason}"))
+        dq, rq = order.get("delivered_qty"), order.get("remain_qty")
+        q = order.get("qty")
+        batch_sum = sum(b["qty"] for b in _valid_batches(order))
+        # 规则1：批次数量之和必须等于 delivered_qty
+        # D-6：仅「缺 delivered_qty」降为 warn（可能是分批起步还没人记账），
+        #       值对不上仍是 error（数据本身矛盾）
+        if dq is None:
+            msgs.append(("warn", f"有 delivery_batches（合计 {batch_sum}）但缺 delivered_qty，批次总量未记账"))
+        elif batch_sum != dq:
+            msgs.append(("error", f"批次数量之和 {batch_sum} ≠ delivered_qty {dq}"))
+        # 规则2：delivered_qty + remain_qty 必须等于 qty
+        if dq is not None and rq is not None \
+                and isinstance(q, int) and not isinstance(q, bool) and dq + rq != q:
+            msgs.append(("error", f"delivered_qty {dq} + remain_qty {rq} ≠ qty {q}"))
+        elif dq is not None and rq is None \
+                and isinstance(q, int) and not isinstance(q, bool):
+            msgs.append(("warn", "有 delivered_qty 但缺 remain_qty，无法核对 delivered+remain=qty"))
+        # 规则3：待补充占位单不应有批次（未确认的东西不可能有交期）
+        if order.get("status") == "待补充":
+            msgs.append(("error", "待补充占位单不应有 delivery_batches（信息未确认不可能定交期）"))
+        return msgs
+
+    # ------------------------------------------------------------------
     # 模块三·2 最新状态解析（后值覆盖前值；冲突/异常不自动覆盖）
     # ------------------------------------------------------------------
-    @staticmethod
-    def _meaningful(v):
-        s = str(v).strip() if v is not None else ""
-        return s not in ("", "None", "待报价")
-
     def apply_latest(self, order_id: str, patch: dict, source: str = "",
                      speaker: str = "", time: str = None, force: bool = False,
                      record_each: bool = True):
@@ -477,7 +617,9 @@ class Store:
         """扫描台账一致性问题，返回问题清单（不改动数据）。
 
         检查项：重复ID、必填字段缺失、状态非法、数量非法（负数/非整数）、
-        交期格式、任务孤儿引用、变更记录缺时间。
+        交期格式、任务孤儿引用、变更记录缺时间；
+        D-2 批次规则：①批次数量之和=delivered_qty ②delivered_qty+remain_qty=qty
+        ③待补充占位单不得带 delivery_batches。
         """
         issues = []
 
@@ -506,6 +648,9 @@ class Store:
             dd = o.get("delivery_date")
             if dd and not (isinstance(dd, str) and len(dd) == 10 and dd[4] == dd[7] == "-"):
                 _issue("error", "order", oid, f"交期「{dd}」非 YYYY-MM-DD 格式")
+            # D-2 批次字段一致性（与 repair 共用同一口径）
+            for level, msg in self._batch_consistency_msgs(o):
+                _issue(level, "order", oid, msg)
             if not o.get("created_at"):
                 _issue("warn", "order", oid, "缺 created_at")
             for c in o.get("change_log", []):
@@ -532,7 +677,9 @@ class Store:
 
         自动修复：重复ID重新编号、非法状态归一化（别名映射，仍非法→沟通中并标记）、
         缺 created_at/updated_at 补当前时间、任务孤儿引用清除、变更记录补时间。
-        不自动改值：负数/非整数数量、非法交期 → 标记 flags 待人工确认（不覆盖原值）。
+        不自动改值：负数/非整数数量、非法交期 → 标记 flags 待人工确认（不覆盖原值）；
+        D-2 批次不一致（批次和≠delivered_qty / delivered+remain≠qty / 占位单带批次）
+        → 仅打 flags.batch_inconsistent 标记进 remaining，绝不静默篡改批次数据。
         """
         actions, remaining = [], []
 
@@ -589,6 +736,16 @@ class Store:
                 flags["locked_fields"] = sorted(
                     set(flags.get("locked_fields") or []) | {"delivery_date"})
                 remaining.append(f"订单 {oid} 交期格式异常（{dd}），已锁定待人工确认")
+            # D-2 批次字段不一致：只标记「需人工确认」，不得静默篡改批次/数量数据
+            # （口径与 integrity_check 共用 _batch_consistency_msgs，防两处漂移）
+            batch_msgs = self._batch_consistency_msgs(o)
+            if batch_msgs:
+                msg = "；".join(m for _, m in batch_msgs)
+                flags["batch_inconsistent"] = f"{msg}，需人工确认（未自动修改）"
+                remaining.append(f"订单 {oid} 批次数据不一致（{msg}），需人工确认")
+                # D-1 修复：必须计入 actions，否则 `if apply and actions: self.save()`
+                # 不触发，batch_inconsistent 标记只存在于内存，重启即丢
+                _act(f"订单 {oid} 批次数据不一致，已标记待人工确认（未改数据）")
 
         # 任务：重复号 / 孤儿引用 / 时间戳
         seen_t = set()

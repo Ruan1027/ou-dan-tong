@@ -116,25 +116,33 @@ SCENARIO_ABNORMAL_MOCK = [
 # 「信息不全占位」——改这里必须同步核对上面的 WEB_DEMO_SEED。
 WEB_SCENARIO_MOCKS = {
     "new": [
-        {"type": "order", "customer": "阿珍（鹿城鞋材）", "product": "EVA 鞋底", "spec": "秋季款发泡",
+        {"type": "order", "intent": "new", "customer": "阿珍（鹿城鞋材）", "product": "EVA 鞋底", "spec": "秋季款发泡",
          "qty": 800, "unit_price": "待报价", "delivery_date": "2026-11-10", "status_hint": "沟通中",
          "sample_flag": "无", "source_excerpt": "老周，秋季那款运动鞋鞋底 EVA 发泡的，先给我 800 双，最好 11 月 10 号前到"},
     ],
     "update": [
-        {"type": "order", "customer": "李姐（瓯越五金贸易）", "product": "DZ47-63 三相断路器",
+        {"type": "order", "intent": "update", "customer": "李姐（瓯越五金贸易）", "product": "DZ47-63 三相断路器",
          "qty": 80, "source_excerpt": "小陈，DZ47 那个加到 80 个"},
     ],
+    # 缺失：客户说「再帮我排上一批」——「一批」是模糊量词，数量必须按缺失处理，
+    # 且语义上是追加（在途单 ORD-01 还在），故 intent=append，交由人工确认数量后再挂到原单下
     "missing": [
-        {"type": "order", "customer": "王总（永嘉精密机械）", "product": "304法兰盘 DN80", "spec": "",
+        {"type": "order", "intent": "append", "customer": "王总（永嘉精密机械）", "product": "304法兰盘 DN80", "spec": "",
          "qty": None, "unit_price": "待报价", "delivery_date": None, "status_hint": "沟通中",
          "sample_flag": "无", "source_excerpt": "小陈，法兰那批的货再帮我排上一批，我这边急"},
     ],
+    # 追加：数量明确 → 新开一条追加单挂到原单 ORD-01 下，原单数量不变
+    "append": [
+        {"type": "order", "intent": "append", "customer": "王总（永嘉精密机械）", "product": "304法兰盘 DN80", "spec": "",
+         "qty": 200, "unit_price": "18.5", "delivery_date": "2026-11-05", "status_hint": "已确认",
+         "sample_flag": "无", "source_excerpt": "小陈，法兰那批再给我加 200 个，跟上次一起发"},
+    ],
     "conflict": [
-        {"type": "order", "customer": "王总（永嘉精密机械）", "product": "304法兰盘 DN80",
+        {"type": "order", "intent": "update", "customer": "王总（永嘉精密机械）", "product": "304法兰盘 DN80",
          "unit_price": "18", "source_excerpt": "小陈，法兰 DN80 那单单价你按 18 算，上次说好的"},
     ],
     "abnormal": [
-        {"type": "order", "customer": "李姐（瓯越五金贸易）", "product": "DZ47-63 三相断路器",
+        {"type": "order", "intent": "update", "customer": "李姐（瓯越五金贸易）", "product": "DZ47-63 三相断路器",
          "qty": -300, "source_excerpt": "小陈，DZ47 那个数量给我改成 -300"},
     ],
 }

@@ -694,10 +694,19 @@ function applyQuery(data){
     toast(`🤔 ${ids.length} 笔都匹配，请补充产品名或单号`);
     return;
   }
-  if(kind === "fallback" && ids.length){
-    HIT_IDS = ids;
-    renderOrderTable(); applyHit(true);
-    note("未精确命中，已在台账高亮全部在途单。换个称呼或按产品问更准，如「法兰那单到哪了」。", "info");
+  if(kind === "fallback"){
+    /* 未精确命中：后端不再回传单号，这里直接按台账把「在途单」全点亮，
+       用户一眼看到的是"我手上还有这几单"，而不是一段文字列表 */
+    const all = ((LAST_LEDGER && LAST_LEDGER.orders) || [])
+      .filter(o=>!["已交付","已取消"].includes(o.status))
+      .map(o=>o.order_id);
+    if(all.length){
+      HIT_IDS = all;
+      renderOrderTable(); applyHit(true);
+      note("未精确命中，已在台账高亮全部在途单（"+all.length+" 笔）。换个称呼或按产品问更准，如「法兰那单到哪了」。", "info");
+      return;
+    }
+    note(stripNote(data.reply||"（无结果）"));
     return;
   }
   /* 无单可定位（解析入库回执 / 闲聊提示 / 台账为空）：如实把文本放出来，绝不静默 */

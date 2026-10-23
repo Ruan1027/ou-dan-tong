@@ -58,4 +58,22 @@ def extract(chat_text: str, llm: LLM = None, mock=None, sender: str = None):
                     continue
         if parsed is None:
             raise
-    return _normalize(parsed)
+    items = _normalize(parsed)
+    # 规则①：本平台直接面向顾客，不存在企业内部上下级转达 —— **发信人就是客户本人**。
+    # 不能只补「customer 为空」的情况：真实模型常把消息里被 @ 的我方业务员
+    # （「小陈，DZ47 那个加到 80 个」里的「小陈」）当成客户抽出来，customer 非空，
+    # 于是「补空值」这种兜底根本不触发，下游照样判成「缺少客户信息」。
+    # 因此这里改为：有 sender 时，customer **强制以发信人为准**。
+    if sender:
+        s = sender.strip()
+        for it in items:
+            if it.get("type") != "order":
+                continue
+            cand = (it.get("customer") or "").strip()
+            if not cand:
+                it["customer"] = s
+            elif s not in cand:
+                # LLM 抽的名字不是发信人 → 以发信人为准；
+                # 原值若像公司名（≥4 字），作为括号备注保留，避免丢信息。
+                it["customer"] = f"{s}（{cand}）" if len(cand) >= 4 else s
+    return items

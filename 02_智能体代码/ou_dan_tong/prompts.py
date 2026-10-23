@@ -4,6 +4,7 @@ EXTRACTION_SYSTEM = """你是制造企业订单要素提取器。从聊天记录
 严格输出 JSON 数组，不编造缺失字段，缺失则填 null：
 [{
  "type": "order" | "task",
+ "intent": "new | update | append | null",
  "customer": "客户称谓（公司名，或消息中对客户的称呼如「王工」；结合上下文归属，完全无线索才填 null）", "product": "", "spec": "", "qty": null,
  "unit_price": "可含'待报价'", "delivery_date": "YYYY-MM-DD|null",
  "sample_flag": "打样|大货|无", "status_hint": "沟通中|已报价|已确认|生产中|部分交付|已交付|已取消|null",
@@ -12,13 +13,21 @@ EXTRACTION_SYSTEM = """你是制造企业订单要素提取器。从聊天记录
 }]
 规则：
 1. 只依据原文；两人对话注意上下文归属，把话术归到正确客户/产品。
-2. 出现"改成/变更为/调到/加到"等动词，视为对该订单字段的【主动更新】，如实抽取新值。
+2. 出现"改成/变更为/调到/加到"等动词，视为对该订单字段的【主动更新】，intent 填 update，如实抽取新值。
 3. 同一订单出现两个互相矛盾的数量/交期（如一处说300一处说280）时，两条都抽出来，
    source_excerpt 分别标注，交由后台做矛盾检测，不要自行取舍。
 4. 数量必为非负整数；交期必为不早于当天的 YYYY-MM-DD；若原文为负、为0、为乱码或交期早于今天，
    仍照原文抽（后台会拦截异常），不要擅自改成"合理"值。
 5. 口语化日期（如「12月1号」「下周五」「月底」）按当前年份补全为 YYYY-MM-DD；确实无法推断的才填 null。
-6. 缺数量或缺交期时，对应字段填 null，不要脑补。"""
+6. 缺数量或缺交期时，对应字段填 null，不要脑补。
+7. **模糊量词不是数量**：「一批」「若干」「一些」「几件」「少量」这类词无法确定具体件数，
+   qty 必须填 null，**绝不允许猜成 1 或其他数字**。这类消息 intent 仍按语义填 append/update/new。
+8. **intent 判定优先级**（重要，决定建单方式）：
+   - 客户说「再走一批 / 再排一批 / 再来一批 / 追加 / 再加 / 补一单 / 另加」等，
+     表示在**原来那单之外再要一笔** → intent 填 **append**（后台会开一条追加单挂到原单下）；
+   - 客户说「改成 / 加到 / 调整为 / 算了还是」等，表示**修改原来那单** → intent 填 **update**；
+   - 首次提到的订单 → intent 填 **new**。
+9. 客户提到「再…」但没有明说是改原单时，优先判 append，不要判 update。"""
 
 # 发送者身份规则：真实微信群每条消息都带发言人昵称，网页端必须一并传入。
 # 缺了它，像「小陈，DZ47 那个加到 80 个」这种客户自报场景会被判成「无客户」而整条丢弃。
@@ -48,6 +57,25 @@ def card_text(order: dict, tasks: list, is_new: bool) -> str:
     if tasks:
         t = "；".join(f"{x['content']}" + (f"（{x['owner']}）" if x.get('owner') else "（待认领）") for x in tasks)
         lines.append(f"🔬 自动记下任务：{t}")
+    if order.get("source_excerpt"):
+        lines.append(f"📎 依据：\"{order['source_excerpt']}\"")
+    return "\n".join(lines)
+
+
+def append_card_text(order: dict) -> str:
+    """追加单卡片：必须一眼看得出「这是加在原单后面的新单，原单没被改」。
+
+    与 card_text 的区别只在于标题行和 parent 标注，其余字段口径完全一致，
+    避免同一张台账出现两套话术。
+    """
+    pid = order.get("parent_order_id") or ""
+    head = f"📥 已登记追加单 {order['order_id']}"
+    head += f"（追加自 {pid}，原单不改动）" if pid else ""
+    lines = [
+        head,
+        f"📦 客户：{order['customer']}｜产品：{order['product']} {order.get('spec','')} ×{order.get('qty','?')}",
+        f"💰 单价 {order.get('unit_price','待报价')} ｜ 📅 交期 {order.get('delivery_date') or '待定'} ｜ 状态：{order.get('status')}",
+    ]
     if order.get("source_excerpt"):
         lines.append(f"📎 依据：\"{order['source_excerpt']}\"")
     return "\n".join(lines)

@@ -4,10 +4,10 @@ import os
 import re
 
 from llm import LLM
-from prompts import card_text, query_text, briefing_text, STATUS_ORDER
+from prompts import card_text, query_text, briefing_text, append_card_text, STATUS_ORDER
 from store import Store
 from validator import validate_extraction, apply_change, classify_order, classify_task
-from contracts import CheckStatus, CHANGE_VERBS
+from contracts import CheckStatus, CHANGE_VERBS, APPEND_INTENTS
 from extractor import extract
 
 
@@ -27,6 +27,21 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
         res = classify_order(o, existing, order_date=order_date, raw_text=chat_text)
         if res.status == CheckStatus.ABNORMAL:
             cards.append("⛔ 异常拦截：" + res.message)
+            continue
+        # —— 追加单（用户 2026-10-23 规则③）——
+        # 必须排在冲突判定【之前】：追加量必然与原单数量不同，
+        # 若放任冲突分支先跑，每一笔正常追加都会被判「数值矛盾」拦掉。
+        # 命中单一定未交付完成（find_active 已排除 已交付/已取消），
+        # 已交付完的会走下面 existing is None 的新建路径。
+        if existing is not None and _has_qty(o) and _is_append(o, chat_text):
+            o["order_id"] = store.next_order_id(date)
+            o["parent_order_id"] = existing["order_id"]
+            o["is_append"] = True
+            o.setdefault("status", "沟通中")
+            o["created_at"] = now
+            o["updated_at"] = now
+            store.add_order(o)
+            out.append(("append", o))
             continue
         if res.status == CheckStatus.CONFLICT:
             if existing is not None:
@@ -107,6 +122,9 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
         if kind == "nochange":
             cards.append(f"⏸️ 无变化：{rec['customer']}的{rec['product']} 数据已一致，未重复写入。")
             continue
+        if kind == "append":
+            cards.append(append_card_text(rec))
+            continue
         show_tasks = new_tasks if i == first_new else []
         cards.append(card_text(rec, show_tasks, kind == "new"))
     # BUG-12 修复：纯任务派发（无订单）且信息齐全时，也要给每条任务可见回执
@@ -181,11 +199,26 @@ def query(question, store: Store, llm: LLM = None):
             if prod in q:
                 hits.add("产品")
             else:
-                # 滑窗匹配产品名中长度≥3的子串（防短词误命中）
+                hit = False
+                # ① 产品名里的 3 字片段出现在问句里（「DZ47-63」被问成「DZ47」）
                 for i in range(len(prod) - 2):
                     if prod[i:i+3] in q:
-                        hits.add("产品")
+                        hit = True
                         break
+                # ② 反向匹配：问句里的 2~4 字片段是产品名的一部分。
+                #    客户只说简称时全靠这条 —— 问「法兰那单到哪了」，
+                #    全名是「304法兰盘 DN80」，只做 3 字滑窗是永远命中不了的。
+                if not hit:
+                    for L in (4, 3, 2):
+                        for i in range(len(q) - L + 1):
+                            seg = q[i:i + L]
+                            if seg.strip() == seg and seg in prod:
+                                hit = True
+                                break
+                        if hit:
+                            break
+                if hit:
+                    hits.add("产品")
         # 规格匹配：仅当规格非空且≥2字
         if spec and len(spec) >= 2 and spec in q:
             hits.add("规格")
@@ -491,6 +524,11 @@ _QUERY_MARKERS = ("到哪", "状态", "查", "进度", "什么时候交", "几�
                  "改过", "历史", "变更", "履历", "几次", "改了什么", "改了啥",
                  "变更记录", "变更历史", "改动", "修改记录")
 _BRIEFING_MARKERS = ("简报", "今天情况", "今日", "整体情况", "汇总", "今天有哪些")
+# 历史追溯类问句：必须先于「订单/改单意图」判定，否则「法兰那单改过几次」里的
+# 「改」会被 CHANGE_VERBS 命中，误送进 parse_chat 去抽订单 → 抽出空卡片
+# → 界面一片空白（用户观感：点了查询没反应）。
+_HISTORY_QUERY_MARKERS = ("改过", "改了什么", "改了啥", "怎么改的", "变更记录",
+                          "变更历史", "修改记录", "历史", "履历", "几次")
 
 
 # 订单/改单意图优先判定：含变更动词或明确的数量/价格数值主张时，即便夹带
@@ -510,6 +548,34 @@ def _looks_like_order(t: str) -> bool:
     return False
 
 
+def _is_append(o: dict, raw_text: str = None) -> bool:
+    """判定是否为「追加单」意图（用户 2026-10-23 规则③）。
+
+    追加 vs 更新：
+    - 追加 = 在原单之外再要一笔（「再走一批 / 再排一批 / 追加 / 再加」）→ 新开一条挂到原单下；
+    - 更新 = 改原单本身（「改成 / 加到 / 调整为」）→ 覆盖原单字段。
+
+    判定顺序：LLM 抽的 intent 是权威，明确表态就照办；只有 intent 缺失时才用关键词兜底。
+    兜底只查 APPEND_INTENTS，**不查 CHANGE_VERBS** —— 「加」同时出现在两边
+    （「再加 200 个」是追加，「数量加到 6000」是更新），靠「先排除变更动词」区分会把
+    追加误杀成更新，实测已踩过。
+    """
+    intent = (o.get("intent") or "").strip().lower()
+    if intent == "append":
+        return True
+    if intent in ("update", "new"):
+        return False
+    text = (o.get("source_excerpt") or "") + " " + (raw_text or "")
+    return any(k in text for k in APPEND_INTENTS)
+
+
+def _has_qty(o: dict) -> bool:
+    try:
+        return int(o.get("qty")) is not None
+    except (TypeError, ValueError):
+        return False
+
+
 def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str = None):
     """统一入口：贴群聊→提取；问句→查单；简报词→汇总。
     sender：发这条消息的客户方称谓（真实微信群的发言人昵称），缺了它客户自报类
@@ -522,11 +588,26 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str =
                 "reply": "把业务群聊粘贴给我，或问我「XX 那单到哪了」「出今日简报」。"}
     if any(k in t for k in _BRIEFING_MARKERS):
         return {"mode": "briefing", "reply": _colloquialize(briefing(store, llm), llm)}
+    # 历史追溯问句先于订单意图判定：「改过几次」里的「改」不是变更指令
+    if any(k in t for k in _HISTORY_QUERY_MARKERS):
+        return {"mode": "query", "reply": _colloquialize(query(t, store, llm), llm)}
     # 订单/改单意图优先：含变更动词或数量/价格数值主张时，即使带「那单」也按群聊解析
     if _looks_like_order(t):
         card, _ = parse_chat(t, store, llm=llm, mock=mock, sender=sender)
+        # 兜底：抽不出任何订单/任务时必须给可见反馈，不能返回空字符串
+        # （空响应在界面上表现为「点了没反应」，用户会判定功能坏了）
+        if not (card or "").strip():
+            return {"mode": "hint",
+                    "reply": "这句话我没能识别出订单要素——请补上客户、产品、数量和交期，"
+                             "或者换个问法，例如「法兰那单到哪了？」「法兰那单改过几次」。"}
         return {"mode": "parse", "reply": card}
     if any(k in t for k in _QUERY_MARKERS):
         return {"mode": "query", "reply": _colloquialize(query(t, store, llm), llm)}
-    card, _ = parse_chat(t, store, llm=llm, mock=mock)
+    # 兜底分支也必须带 sender —— 早前这里漏传，导致「小陈，法兰那批再帮我排上一批」
+    # 这类既不含变更动词也不含数量的消息走进来后丢掉发信人，被误判「缺少客户信息」。
+    card, _ = parse_chat(t, store, llm=llm, mock=mock, sender=sender)
+    if not (card or "").strip():
+        return {"mode": "hint",
+                "reply": "没识别出订单或任务。可问我「XX 那单到哪了」「出今日简报」，"
+                         "或直接粘贴客户的原话群聊。"}
     return {"mode": "parse", "reply": card}

@@ -71,6 +71,9 @@ def _pick_mock(scenario, text):
         return _SCENARIO_MOCKS["abnormal"]
     if any(k in text for k in ("缺失", "缺信息", "没说数量")):
         return _SCENARIO_MOCKS["missing"]
+    # 追加要在「更新」之前判：「再加」同时含「加」，先判更新会误路由
+    if any(k in text for k in ("追加", "再加", "再走", "再排", "再来")):
+        return _SCENARIO_MOCKS["append"]
     if any(k in text for k in ("改成", "改为", "更新", "变更", "调成")):
         return _SCENARIO_MOCKS["update"]
     return SCENARIO1_MOCK

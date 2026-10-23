@@ -184,11 +184,54 @@ def test_state_machine():
         shutil.rmtree(d, ignore_errors=True)
 
 
+# —— D-1 批次交期有效性解析 ——
+def test_batch_delivery():
+    s, d = _tmp_store()
+    try:
+        # 用例1：两批交完 → 有效交期=最晚批次日，delivered=900 done=True
+        full = _order(qty=900, delivery_date=None,
+                      delivery_batches=[{"qty": 500, "date": "2026-11-01"},
+                                        {"qty": 400, "date": "2026-11-03"}])
+        full["order_id"] = "ORD-B1"
+        s.add_order(full)
+        assert s.effective_delivery_date(full) == "2026-11-03", full["delivery_batches"]
+        bs = s.batch_summary(full)
+        assert bs == {"has_batches": True, "delivered": 900, "total": 900,
+                      "done": True, "last_date": "2026-11-03"}, bs
+
+        # 用例2：只交第一批 → 有效交期=唯一批次日，delivered=500 done=False
+        part = _order(qty=900, delivery_date=None,
+                      delivery_batches=[{"qty": 500, "date": "2026-11-01"}])
+        part["order_id"] = "ORD-B2"
+        s.add_order(part)
+        assert s.effective_delivery_date(part) == "2026-11-01"
+        bs = s.batch_summary(part)
+        assert bs["has_batches"] is True and bs["delivered"] == 500 and bs["done"] is False, bs
+
+        # 用例3：无批次 → 回退 delivery_date，has_batches=False
+        plain = _order(qty=100, delivery_date="2026-11-05")
+        plain["order_id"] = "ORD-B3"
+        s.add_order(plain)
+        assert s.effective_delivery_date(plain) == "2026-11-05"
+        assert s.batch_summary(plain)["has_batches"] is False
+
+        # 用例4：全空 → None，done=False
+        empty = _order(qty=None, delivery_date=None)
+        empty["order_id"] = "ORD-B4"
+        s.add_order(empty)
+        assert s.effective_delivery_date(empty) is None
+        assert s.batch_summary(empty)["done"] is False
+        print("✓ D-1 批次交期有效性解析：批次取最晚日期、无批次回退、全空返回 None")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_model()
     test_latest_state()
     test_persistence()
     test_integrity()
     test_state_machine()
+    test_batch_delivery()
     print("-" * 46)
     print("模块三 ALL TESTS PASSED ✅")

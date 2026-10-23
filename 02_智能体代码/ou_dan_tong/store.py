@@ -274,6 +274,54 @@ class Store:
         return None
 
     # ------------------------------------------------------------------
+    # D-1 批次交期有效性解析（分批交期语义的单一解释口径）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _valid_batches(order: dict):
+        """取批次列表里的合法条目（qty 为非负整数、date 为 YYYY-MM-DD 字符串）。"""
+        batches = order.get("delivery_batches") or []
+        out = []
+        if isinstance(batches, list):
+            for b in batches:
+                if not isinstance(b, dict):
+                    continue
+                q = b.get("qty")
+                dt = b.get("date")
+                qi = q if isinstance(q, int) and not isinstance(q, bool) else None
+                if qi is not None and qi >= 0 and isinstance(dt, str) and len(dt) == 10:
+                    out.append({"qty": qi, "date": dt})
+        return out
+
+    def effective_delivery_date(self, order: dict):
+        """返回该单真正该交付的日期（模块二冲突比对请用此口径，别直接比 delivery_date）。
+
+        - 有 delivery_batches：返回所有批次里最晚的日期（全部批次交完才算交完）
+        - 无批次（或批次全部非法）：回退 order["delivery_date"]
+        - 都没有：返回 None
+        """
+        batches = self._valid_batches(order)
+        if batches:
+            return max(b["date"] for b in batches)
+        return order.get("delivery_date") or None
+
+    def batch_summary(self, order: dict) -> dict:
+        """返回批次汇总，供查询应答 / 简报 / 状态推进直接消费。
+
+        - 无批次：{"has_batches": False, "delivered": 0, "total": qty, "done": False}
+        - 有批次：{"has_batches": True, "delivered": 批次数量之和, "total": qty,
+                   "done": delivered >= total, "last_date": 最晚批次日期}
+        """
+        qty = order.get("qty")
+        total = qty if isinstance(qty, int) and not isinstance(qty, bool) else 0
+        batches = self._valid_batches(order)
+        if not batches:
+            return {"has_batches": False, "delivered": 0, "total": total, "done": False}
+        delivered = sum(b["qty"] for b in batches)
+        return {"has_batches": True, "delivered": delivered, "total": total,
+                "done": bool(total and delivered >= total),
+                "last_date": max(b["date"] for b in batches)}
+
+    # ------------------------------------------------------------------
     # 模块三·2 最新状态解析（后值覆盖前值；冲突/异常不自动覆盖）
     # ------------------------------------------------------------------
     @staticmethod

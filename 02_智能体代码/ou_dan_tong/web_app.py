@@ -15,9 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from store import Store
 from agent import handle_message
 from llm import LLM
-from sim_chats import (SCENARIO1_MOCK, SEED_MOCK, WEB_DEMO_SEED, SCENARIO_NEW_MOCK,
-                       SCENARIO_UPDATE_MOCK, SCENARIO_MISSING_MOCK,
-                       SCENARIO_CONFLICT_MOCK, SCENARIO_ABNORMAL_MOCK)
+from sim_chats import SCENARIO1_MOCK, SEED_MOCK, WEB_DEMO_SEED, WEB_SCENARIO_MOCKS
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 INDEX = os.path.join(ROOT, "static", "index.html")
@@ -59,13 +57,8 @@ def ledger_state():
             "mode": MODE_LABEL, "mock": USE_MOCK}
 
 
-_SCENARIO_MOCKS = {
-    "new": SCENARIO_NEW_MOCK,
-    "update": SCENARIO_UPDATE_MOCK,
-    "missing": SCENARIO_MISSING_MOCK,
-    "conflict": SCENARIO_CONFLICT_MOCK,
-    "abnormal": SCENARIO_ABNORMAL_MOCK,
-}
+# 网页演示专用场景数据：实体与 WEB_DEMO_SEED 严格对齐（见 sim_chats.py 注释）
+_SCENARIO_MOCKS = WEB_SCENARIO_MOCKS
 
 
 def _pick_mock(scenario, text):
@@ -73,13 +66,13 @@ def _pick_mock(scenario, text):
     if scenario in _SCENARIO_MOCKS:
         return _SCENARIO_MOCKS[scenario]
     if any(k in text for k in ("冲突", "矛盾", "对不上")):
-        return SCENARIO_CONFLICT_MOCK
+        return _SCENARIO_MOCKS["conflict"]
     if any(k in text for k in ("异常", "负数", "笔误")):
-        return SCENARIO_ABNORMAL_MOCK
+        return _SCENARIO_MOCKS["abnormal"]
     if any(k in text for k in ("缺失", "缺信息", "没说数量")):
-        return SCENARIO_MISSING_MOCK
+        return _SCENARIO_MOCKS["missing"]
     if any(k in text for k in ("改成", "改为", "更新", "变更", "调成")):
-        return SCENARIO_UPDATE_MOCK
+        return _SCENARIO_MOCKS["update"]
     return SCENARIO1_MOCK
 
 
@@ -88,9 +81,27 @@ def do_chat(text, scenario=None, sender=None):
         mock = _pick_mock(scenario, text) if USE_MOCK else None
         try:
             result = handle_message(text, _store, llm=_llm, mock=mock, sender=sender)
-        except Exception as e:  # LLM 网关抖动等：返回友好提示，不让请求空响应
-            result = {"mode": "error",
-                      "reply": f"⚠️ 智能体处理暂时失败（{type(e).__name__}），请稍后重试。"}
+        except Exception as e:
+            # 大模型网关超时/抖动（词元天下实测单次 18~50s，偶发撞满 timeout）：
+            # 用该场景的预置抽取结果重跑一遍，让模块二的规则判定（异常/冲突/缺失/正常）
+            # 照常产出结论与台账写入，而不是甩给用户一句 TimeoutError。
+            fallback = _SCENARIO_MOCKS.get(scenario) if scenario else None
+            if fallback is not None:
+                try:
+                    result = handle_message(text, _store, llm=None, mock=fallback, sender=sender)
+                    result["degraded"] = True
+                    result["reply"] = result["reply"] + (
+                        "\n\n⚡ 大模型网关本次响应超时（词元天下侧抖动，非本系统故障）。"
+                        "已由本地规则引擎即时判定，结论与台账写入均有效；"
+                        "重发一次即可走真实大模型。")
+                except Exception as e2:
+                    result = {"mode": "error",
+                              "reply": f"⚠️ 处理失败（{type(e).__name__}/{type(e2).__name__}），请稍后重试。"}
+            else:
+                result = {"mode": "error",
+                          "reply": "⚠️ 大模型网关响应超时（词元天下侧抖动，非本系统故障）。"
+                                   "可先问我「XX 那单到哪了」或「出今日简报」——"
+                                   "查询与简报走本地规则引擎，不依赖大模型，能立即出结果。"}
     result["ledger"] = ledger_state()
     # 模拟模式提示：未接入 API Key 时输入不真实解析、展示预置演示数据；
     # 配置 DEEPSEEK_API_KEY 后进入真实模式，此提示自动隐藏
@@ -107,6 +118,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        # 一律禁用缓存：否则浏览器会拿旧 HTML 继续渲染，改了代码却看不到效果
+        # （此前多次「页面数据仍是旧实体、模式仍显示模拟模式」正是这个原因）。
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(data)
 

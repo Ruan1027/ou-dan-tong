@@ -49,16 +49,19 @@ def _has_change_verb(text):
 # 向下兼容：LLM 抽取结果规整 + 变更比对
 # ---------------------------------------------------------------------------
 def validate_extraction(raw):
-    """raw: LLM 返回的 list[dict]。返回 (orders, tasks, skipped)。"""
+    """raw: LLM 返回的 list[dict]。返回 (orders, tasks, skipped)。
+
+    注意：缺客户 / 缺产品的 order **不再丢进 skipped**，而是照常规整后交给
+    classify_order 判 MISSING，由上层登记「待补充」占位单进台账。
+    旧行为直接丢弃，用户只能看到「1 条信息不全（缺客户或产品），已跳过」，
+    既不知道缺的是什么，台账里也查不到这一单，无法补充 → 已按用户反馈修正。
+    """
     orders, tasks, skipped = [], [], []
     for item in raw or []:
         t = item.get("type")
         if t == "order":
             customer = (item.get("customer") or "").strip()
             product = (item.get("product") or "").strip()
-            if not customer or not product:
-                skipped.append(item)
-                continue
             dd = item.get("delivery_date")
             if dd and not DATE_RE.match(str(dd)):
                 dd = None
@@ -142,13 +145,24 @@ def classify_order(o: dict, existing: dict = None, order_date: str = None,
     # 变更意图：原文或摘录里出现变更动词即视为「主动更新」
     _verb_text = (o.get("source_excerpt") or "") + " " + (raw_text or "")
 
-    # 0. 主键缺失：无法建单
+    # 0. 主键缺失：无法正式建单，但必须登记占位单进台账并说清缺什么，
+    #    不能只丢一句「信息不全」（用户无从补充）。
     if not customer or not product:
-        return ValidationResult(
-            CheckStatus.MISSING,
-            message=f"缺客户或产品名，无法建单，已跳过，请补充「{product or '产品'}」的归属客户。",
-            patch=None,
-        )
+        miss = []
+        if not customer:
+            miss.append("客户信息")
+        if not product:
+            miss.append("产品信息")
+        known = []
+        if customer:
+            known.append(f"客户「{customer}」")
+        if product:
+            known.append(f"产品「{product}」")
+        msg = "缺少" + "、".join(miss) + "，已登记待补充占位单"
+        if known:
+            msg += "（已知" + "、".join(known) + "）"
+        msg += "，请补充后我再正式建单。"
+        return ValidationResult(CheckStatus.MISSING, message=msg, patch=None)
 
     # 1. 异常拦截（最高优先级，直接 block，绝不写入）
     qty = o.get("qty")

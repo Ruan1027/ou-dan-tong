@@ -35,6 +35,14 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
             cards.append("⚠️ 冲突待确认：" + res.message)
             continue
         if res.status == CheckStatus.MISSING:
+            if existing is not None:
+                # 台账已有这一单：只追问缺什么，**不重复建占位单**
+                # （否则同客户同产品会出现两张单，台账重复计数）
+                existing.setdefault("flags", {})["missing"] = res.message
+                store.update_order(existing["order_id"], {}, None)
+                cards.append(f"🟡 信息待补充 {existing['order_id']}：" + res.message
+                             + "（台账已有该单，补齐后我直接更新，不再重复建单）")
+                continue
             # 登记占位单，状态「待补充」，便于台账可见，待补全后正式建单
             o["order_id"] = store.next_order_id(date)
             o["status"] = "待补充"
@@ -42,7 +50,9 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
             o["created_at"] = now
             o["updated_at"] = now
             store.add_order(o)
-            cards.append("🟡 信息不全已占位：" + res.message)
+            # 卡片必须写清「缺什么」+「在哪能查到」，否则用户无从补充
+            cards.append(f"🟡 信息不全已占位 {o['order_id']}：" + res.message
+                         + "（已记入「📊 平台汇总」台账，状态=待补充）")
             continue
         # —— 正常（ok）：新建 或 主动更新 ——
         if existing is not None:
@@ -104,7 +114,10 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
         for t in new_tasks:
             cards.append(_task_card(t))
     if skipped:
-        cards.append(f"⚠️ 有 {len(skipped)} 条信息不全（缺客户或产品），已跳过，待人工确认。")
+        # 走到这里的只有「type 既非 order 也非 task」的条目（缺客户/缺产品的订单
+        # 已改为登记待补充占位单，不再进 skipped），故文案不再提「缺客户或产品」。
+        cards.append(f"⚠️ 有 {len(skipped)} 条内容既不是订单也不是任务，已忽略。"
+                     "如果这是订单，请把客户、产品、数量、交期一起发我。")
     return "\n\n".join(cards), {"orders": out, "tasks": new_tasks, "skipped": len(skipped)}
 
 

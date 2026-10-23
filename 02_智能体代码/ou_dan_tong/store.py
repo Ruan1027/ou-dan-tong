@@ -253,6 +253,10 @@ class Store:
         return next((t for t in self.tasks if t.get("task_id") == task_id), None)
 
     def find_active(self, customer: str, product: str):
+        # 主键为空时不做任何匹配：否则多条「缺客户」占位单会互相撞车，
+        # 后一条缺客户消息会把前一条占位单当成「同一单」去更新（数据串台）。
+        if not (customer or "").strip() or not (product or "").strip():
+            return None
         # 1) 精确匹配（mock / 正式名称场景，行为与原版完全一致）
         for o in self.orders:
             if o.get("customer") == customer and o.get("product") == product \

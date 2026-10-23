@@ -358,6 +358,24 @@ ok("TimeoutError" not in _q and "timed out" not in _q.lower(),
    "T6 query 降级：不含任何异常字样", _q[:90])
 ok("✅" in _q or "已确认" in _q, "T6 query 降级：仍带状态标记", _q[:90])
 
+# focus 定位指令契约（696515c 新增）：网页端靠它做「跳转+高亮」，
+# 后端若漏下发，前端跳转/高亮永远不触发且无任何报错——典型的静默失效。
+_r_hit = handle_message("李姐那单到哪了", _s6, llm=DeadLLM())
+_focus = _r_hit.get("focus") or {}
+_lj_id = next((o.get("order_id") for o in _s6.orders
+               if str(o.get("customer", "")).startswith("李姐")), None)
+ok(_focus.get("kind") == "orders",
+   "T6 focus 契约：命中查询 kind=orders", str(_focus))
+ok(_lj_id is not None and _lj_id in (_focus.get("order_ids") or []),
+   "T6 focus 契约：order_ids 含李姐那单（前端据此跳转高亮）", str(_focus))
+# 注意：必须用独立 session_key，否则 C-2 指代消解会把「周大福那单」按上一轮
+# 上下文（李姐）解析掉，fallback 分支永远测不到。
+_r_miss = handle_message("周大福那单到哪了", _s6, llm=DeadLLM(), session_key="t6_miss")
+_focus_miss = _r_miss.get("focus") or {}
+ok(_focus_miss.get("kind") == "fallback" and _focus_miss.get("order_ids") == [],
+   "T6 focus 契约：无命中 kind=fallback 且 order_ids 为空（前端据此高亮全部在途单）",
+   str(_focus_miss))
+
 _b = briefing(_s6, llm=DeadLLM())
 ok(_b.lstrip().startswith("📋"), "T6 briefing 降级：仍出简报", _b[:60])
 # 简报日期用「真实今天」断言，不硬编码年份前缀——否则跨年后这条会静默挂掉

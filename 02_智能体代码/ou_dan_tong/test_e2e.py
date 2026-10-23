@@ -185,6 +185,10 @@ def run():
         r = c.chat("DZ47 那单到哪了？")
         reply = r.get("reply", "")
         ck.ok("80" in reply, "查询返回最新数量 80（而非旧版 50）", reply[:80])
+        # focus 定位指令契约（696515c）：网页端跳转/高亮依赖它，静默失效无任何报错
+        focus = r.get("focus") or {}
+        ck.ok(focus.get("kind") == "orders" and len(focus.get("order_ids") or []) >= 1,
+              "查询响应带 focus 定位指令（kind=orders 且含命中单号）", str(focus))
 
         # ---------- S8 简报：四类统计 ----------
         print("\n[S8] 说「出今日简报」")

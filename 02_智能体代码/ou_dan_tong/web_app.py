@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from store import Store
 from agent import handle_message
 from llm import LLM
-from sim_chats import (SCENARIO1_MOCK, SEED_MOCK, SCENARIO_NEW_MOCK,
+from sim_chats import (SCENARIO1_MOCK, SEED_MOCK, WEB_DEMO_SEED, SCENARIO_NEW_MOCK,
                        SCENARIO_UPDATE_MOCK, SCENARIO_MISSING_MOCK,
                        SCENARIO_CONFLICT_MOCK, SCENARIO_ABNORMAL_MOCK)
 
@@ -45,12 +45,12 @@ MODE_LABEL = "模拟模式（未配置 API Key，演示用预置数据）" if US
 if USE_MOCK:
     # 演示预置在途单：使冲突/更新/异常场景能命中 existing（模块二可见）
     _store.reset()
-    handle_message("__seed__", _store, llm=None, mock=SEED_MOCK)
+    handle_message("__seed__", _store, llm=None, mock=WEB_DEMO_SEED)
 else:
     # 真实模式同样 reset + seed 演示在途单（mock 直接入库，不走 LLM）：
     # 保证冲突/更新/查单/简报开箱即有演示对象，与模拟模式体验一致。
     _store.reset()
-    handle_message("__seed__", _store, llm=None, mock=SEED_MOCK)
+    handle_message("__seed__", _store, llm=None, mock=WEB_DEMO_SEED)
 _LOCK = threading.Lock()
 
 
@@ -139,7 +139,7 @@ class Handler(BaseHTTPRequestHandler):
             with _LOCK:
                 _store.reset()
                 # 两种模式都 re-seed 演示在途单，保证重置后冲突/更新/查单仍有演示对象
-                handle_message("__seed__", _store, llm=None, mock=SEED_MOCK)
+                handle_message("__seed__", _store, llm=None, mock=WEB_DEMO_SEED)
             self._json(ledger_state())
         else:
             self._send(404, "Not Found")

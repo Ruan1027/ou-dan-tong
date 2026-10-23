@@ -45,6 +45,25 @@ SEED_MOCK = [
      "sample_flag": "大货", "source_excerpt": "万博机电 TND-3 稳压器 200台 下周排产 28号前出货"},
 ]
 
+# —— 网页体验增强（对齐模块一 chat_logs.json 真实实体）——
+# 演示启动 seed 以下在途单，使「改数量/冲突/异常」按钮能命中 existing。
+# 实体来源：模块一 S1-G1 / S1-G2 / S3-G3
+#   · 王总（永嘉精密机械）/ 304法兰盘 DN80  → 承接「信息缺失 / 数据冲突」按钮
+#   · 李姐（瓯越五金贸易）/ DZ47-63 三相断路器 → 承接「改数量 / 异常拦截」按钮
+#   · 陈老板（瑞安汽配）/ 轴承 6204 → 仅作台账丰富（不与其他按钮实体撞名，避免「法兰」歧义）
+# 新增订单按钮（阿珍/鹿城鞋材/EVA 鞋底）故意不 seed，以演示「新建」。
+WEB_DEMO_SEED = [
+    {"type": "order", "customer": "王总（永嘉精密机械）", "product": "304法兰盘 DN80", "spec": "",
+     "qty": 250, "unit_price": "18.5", "delivery_date": "2026-10-28", "status_hint": "已确认",
+     "sample_flag": "无", "source_excerpt": "王总 304法兰盘 DN80 250个 18.5 10-28交"},
+    {"type": "order", "customer": "李姐（瓯越五金贸易）", "product": "DZ47-63 三相断路器", "spec": "",
+     "qty": 50, "unit_price": "26", "delivery_date": "2026-10-27", "status_hint": "已确认",
+     "sample_flag": "无", "source_excerpt": "李姐 DZ47-63 三相 50个 26 10-27交"},
+    {"type": "order", "customer": "陈老板（瑞安汽配）", "product": "轴承 6204", "spec": "",
+     "qty": 150, "unit_price": "7.0", "delivery_date": "2026-11-01", "status_hint": "已确认",
+     "sample_flag": "无", "source_excerpt": "陈老板 轴承6204 150个 7.0 11-01交"},
+]
+
 # 新建：全新客户+产品，字段齐全 → 正常建单
 SCENARIO_NEW_MOCK = [
     {"type": "order", "customer": "瑞安精工", "product": "轴承座", "spec": "UC205",

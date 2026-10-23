@@ -16,6 +16,9 @@
     T3  网关超时降级：LLM 必抛 TimeoutError，五类场景仍各出正确结论且不含异常字样
     T4  缺客户 / 缺产品：登记「待补充」占位单进台账，卡片点名缺什么（不再整条丢弃）
     T5  响应头禁缓存：Cache-Control: no-store（真实起 HTTP 服务实测 + 源码断言）
+    T6  真实模式 query / briefing：网关挂掉也要能查单、能出简报（此前零覆盖）
+        —— 含 BUG-03 / BUG-04 双向守卫：未来交期说「还有 N 天」、真逾期说「已逾期」
+    T7  多轮 sender 一致性：第 N 轮发言人不得串到别的客户名下（防跨轮串台）
 
 设计红线：
     1. **零网络**：LLM 一律是假对象，不产生任何外联；给 web_app 的 Key/URL 是假值，
@@ -48,6 +51,7 @@ os.environ["OPENAI_API_KEY"] = "fake-key-no-network"
 os.environ["OPENAI_MODEL"] = "fake-model"
 
 from agent import handle_message, parse_chat          # noqa: E402
+from agent import query, briefing                      # noqa: E402
 from extractor import extract                          # noqa: E402
 from prompts import SENDER_RULE                        # noqa: E402
 from sim_chats import WEB_DEMO_SEED                    # noqa: E402
@@ -94,6 +98,36 @@ class RuleAwareLLM(FakeLLM):
             '"qty":80,"unit_price":"26","delivery_date":"2026-10-27",'
             '"status_hint":"已确认","source_excerpt":"小陈，DZ47 那个加到 80 个"}]'
             % ("null" if cust is None else '"%s"' % cust)
+        )
+
+
+class ContentAwareLLM(FakeLLM):
+    """按**正文内容**抽取的假 LLM（比 RuleAwareLLM 更贴近真实模型）。
+
+    为什么需要它：RuleAwareLLM 无论正文是什么都返回同一条 DZ47-63/80，
+    用它做多轮测试时每一轮抽到的都是同一条数据 —— 于是「上一轮的 sender /
+    上下文串到下一轮」这类 bug **根本测不出来**。本类按正文里的产品关键词与
+    数量分别返回不同结果，才能真正把守多轮一致性。
+    """
+
+    _PRODUCTS = (("DZ47", "DZ47-63 三相断路器"),
+                 ("法兰", "304法兰盘 DN80"),
+                 ("轴承", "轴承 6204"),
+                 ("继电器", "继电器 JQX-13F"))
+
+    def chat(self, system, user, json_mode=False):
+        self.calls.append({"system": system, "user": user, "json_mode": json_mode})
+        m = re.match(r"\[发送者:([^\]]+)\]\s*", user)
+        cust = m.group(1) if m else None
+        body = user[m.end():] if m else user
+        prod = next((p for k, p in self._PRODUCTS if k in body), "通用件")
+        qm = re.search(r"(?:加到|改成|改为|到)\s*(\d+)", body) or re.search(r"(\d+)\s*个", body)
+        qty = int(qm.group(1)) if qm else 100
+        return (
+            '[{"type":"order","customer":%s,"product":"%s","qty":%d,'
+            '"unit_price":"26","delivery_date":"2026-10-27",'
+            '"status_hint":"已确认","source_excerpt":"%s"}]'
+            % ("null" if cust is None else '"%s"' % cust, prod, qty, body[:20])
         )
 
 
@@ -307,6 +341,83 @@ _src = inspect.getsource(web_app.Handler._send)
 ok("Cache-Control" in _src and "no-store" in _src,
    "T5 源码层：Handler._send 硬性写入 no-store（防止被后续改动悄悄删掉）")
 
+# ===========================================================================
+# T6 · 真实模式下的 查询 / 简报 链路（此前零覆盖）
+# ===========================================================================
+print("\n[T6] 真实模式 query / briefing：网关挂掉也要能查单、能出简报")
+_s6 = fresh_store()
+
+_q = query("李姐那单到哪了", _s6, llm=DeadLLM())
+ok("李姐" in _q, "T6 query 降级：命中李姐那单", _q[:90])
+ok("50" in _q, "T6 query 降级：回显台账真实数量 50", _q[:90])
+ok("TimeoutError" not in _q and "timed out" not in _q.lower(),
+   "T6 query 降级：不含任何异常字样", _q[:90])
+ok("✅" in _q or "已确认" in _q, "T6 query 降级：仍带状态标记", _q[:90])
+
+_b = briefing(_s6, llm=DeadLLM())
+ok(_b.lstrip().startswith("📋"), "T6 briefing 降级：仍出简报", _b[:60])
+ok(re.search(r"2026-\d{2}-\d{2}", _b) is not None, "T6 briefing 降级：简报带日期", _b[:60])
+ok("TimeoutError" not in _b and "timed out" not in _b.lower(),
+   "T6 briefing 降级：不含任何异常字样", _b[:80])
+# BUG-03 / BUG-04 的真实模式守卫（双向：未来交期与已逾期各断言一次，
+# 避免写成「恒真」的弱守卫 —— 若只断言「没有已拖」，无论代码怎么改都绿）
+ok("已拖" not in _b,
+   "T6 briefing：未来交期没被说成「已拖 X 天」（BUG-03 旧措辞守卫）", _b[:130])
+ok("999" not in _b,
+   "T6 briefing：无「已拖 999 天」式的缺失兜底（BUG-04 守卫）", _b[:130])
+ok("还有" in _b and "已逾期" not in _b,
+   "T6 briefing：未来交期说「还有 N 天」而非「已逾期」（BUG-03 正向守卫）", _b[:130])
+
+# 反向侧：把一单交期改到过去，简报必须改口说「已逾期」并列入临期交付
+# —— 这条同时证明上面那条不是恒真断言。
+_s6b = fresh_store()
+# 简报的「最急」只统计「沟通中」的待报价单，故必须挑这种状态的单才测得准
+_overdue = next((o for o in _s6b.orders
+                 if o.get("delivery_date") and o.get("status") == "沟通中"), None)
+if _overdue is not None:
+    _overdue["delivery_date"] = "2026-09-01"
+_b2 = briefing(_s6b, llm=DeadLLM())
+ok("已逾期" in _b2, "T6 briefing：真逾期时改口说「已逾期」（守卫区分度）", _b2[:200])
+ok("2026-09-01" in _b2, "T6 briefing：逾期单被列入临期交付清单", _b2[:200])
+
+# ===========================================================================
+# T7 · 多轮 sender 一致性：第 N 轮的发言人不能串到别的客户名下
+# ===========================================================================
+print("\n[T7] 多轮 sender 一致性：两轮不同发言人，各自落到自己客户名下")
+_s7 = fresh_store()
+_n7 = len(_s7.orders)
+_llm7 = ContentAwareLLM()
+handle_message("小陈，DZ47 那个加到 80 个", _s7, llm=_llm7, sender="李姐")
+handle_message("小陈，法兰那批加到 400 个", _s7, llm=_llm7, sender="王总")
+
+ok(_llm7.calls[-1]["user"].startswith("[发送者:王总] "),
+   "T7 第2轮 prompt 的 sender 是王总（不带上一轮的李姐）",
+   _llm7.calls[-1]["user"][:40])
+ok("[发送者:李姐]" not in _llm7.calls[-1]["user"],
+   "T7 第2轮 prompt 里没有上一轮发言人残留", _llm7.calls[-1]["user"][:60])
+
+_li = next((o for o in _s7.orders if "李姐" in str(o.get("customer"))
+            and "DZ47" in str(o.get("product"))), None)
+_wang = next((o for o in _s7.orders if "王总" in str(o.get("customer"))
+              and "法兰" in str(o.get("product"))), None)
+ok(_li is not None and _li.get("qty") == 80,
+   "T7 李姐那单（DZ47）已更新为 80",
+   f"{_li and (_li.get('customer'), _li.get('product'), _li.get('qty'))}")
+ok(_wang is not None and _wang.get("qty") == 400,
+   "T7 王总那单（法兰）已更新为 400",
+   f"{_wang and (_wang.get('customer'), _wang.get('product'), _wang.get('qty'))}")
+ok(not any("王总" in str(o.get("customer", "")) and "DZ47" in str(o.get("product", ""))
+           for o in _s7.orders),
+   "T7 王总名下没有李姐的产品（无跨轮串台）",
+   str([(o.get("customer"), o.get("product")) for o in _s7.orders]))
+ok(not any("李姐" in str(o.get("customer", "")) and o.get("qty") == 400
+           for o in _s7.orders),
+   "T7 李姐那单没被第2轮的数量污染",
+   str([(o.get("customer"), o.get("qty")) for o in _s7.orders]))
+ok(len(_s7.orders) == _n7,
+   f"T7 两轮都是更新而非新建脏单（{_n7}→{len(_s7.orders)}）",
+   f"{_n7}→{len(_s7.orders)}")
+
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 78)
 print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项 ｜ 耗时 {time.time() - _T0:.2f}s（零网络）")
@@ -328,4 +439,13 @@ print("✅ 真实模式回归全部通过")
 #       把 Handler._send 的 Cache-Control 行删掉 → T5 必红；
 #       把 validator.classify_order 的「缺客户/缺产品」分支改回丢弃 → T4 必红。
 # 任一项「拆了还绿」都说明这条测试没在把守，需要补断言。
+#
+# T6 / T7 的反向验证（已实测）：
+#   1. T7：把第2轮的 `sender="王总"` 改成 `sender="李姐"`（模拟跨轮串台）
+#      → 5 项转红，并暴露真实后果：多出一条「李姐 / 400」脏单、王总那单没被更新。
+#   2. T6：把 briefing 的 `tag = "已逾期" if days < 0 else f"还有 {days} 天"` 的
+#      判断反过来 → 「未来交期说『还有 N 天』」与「真逾期说『已逾期』」两条同时变红。
+#      （双向断言的意义：只断言「没有『已拖』」是恒真的弱守卫，代码怎么改都绿。）
+#   3. T6 / T7 共同依赖的假 LLM 选择：多轮一律用 ContentAwareLLM（按正文抽），
+#      不要用 RuleAwareLLM —— 后者每轮都返回同一条 canned 数据，串台根本测不出来。
 # ---------------------------------------------------------------------------

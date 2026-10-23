@@ -11,7 +11,8 @@
 import re
 import datetime
 
-from contracts import CheckStatus, ValidationResult, CHANGE_VERBS, VAGUE_QTY_WORDS
+from contracts import (CheckStatus, ValidationResult, CHANGE_VERBS, VAGUE_QTY_WORDS,
+                       effective_delivery_date)
 from prompts import STATUS_RANK
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -59,7 +60,7 @@ def _missing_message(o: dict, raw_text: str = None, existing: dict = None):
     vague = _vague_qty_word(o, raw_text)
     if not _meaningful(o.get("qty")):
         miss.append(f"数量（原文「{vague}」为模糊量词，需明确件数）" if vague else "数量")
-    if not _meaningful(o.get("delivery_date")):
+    if not _meaningful(effective_delivery_date(o)):
         miss.append("交期")
     if not miss:
         return None
@@ -142,6 +143,11 @@ def apply_change(existing: dict, extracted: dict, now: str = None):
     """返回 (patch, change|None)。仅覆盖本次有值字段，并记录变更履历。"""
     now = now or datetime.datetime.now().isoformat(timespec="seconds")
     patch, changes = {}, []
+    # 交期比对口径统一（契约 effective_delivery_date）：分批单 delivery_date 常为 null，
+    # 不归一就会把「同一交期」误记成一次变更（履历里凭空多一条 无 → 2026-11-03）。
+    # TODO(产品决策)：分批单若收到单一新交期，应视为「替换计划、清空批次」还是「追加一批」，
+    #   当前未定，故这里只做只读归一，不改写 delivery_batches。
+    existing = {**existing, "delivery_date": effective_delivery_date(existing)}
     for field in ["spec", "qty", "unit_price", "delivery_date", "sample_flag"]:
         new = extracted.get(field)
         if _meaningful(new) and str(new) != str(existing.get(field)):
@@ -257,9 +263,13 @@ def classify_order(o: dict, existing: dict = None, order_date: str = None,
     if existing and existing.get("status") != "待补充":
         verb = _has_change_verb(_verb_text)
         contradictions = []
+        # 交期口径统一（契约 effective_delivery_date）：分批单的 delivery_date 常为 null，
+        # 直接比裸字段会让「交期冲突」静默漏检，也会把同一单误判成没变更。
+        _cmp_existing = {**existing, "delivery_date": effective_delivery_date(existing)}
+        _cmp_new = {**o, "delivery_date": effective_delivery_date(o)}
         for f in ("qty", "unit_price", "delivery_date"):
-            ev = existing.get(f)
-            nv = o.get(f)
+            ev = _cmp_existing.get(f)
+            nv = _cmp_new.get(f)
             if _meaningful(ev) and _meaningful(nv) and str(ev) != str(nv) and not verb:
                 contradictions.append(f"{_FIELD_CN.get(f, f)}：台账 {ev} ↔ 来单 {nv}")
         if contradictions:

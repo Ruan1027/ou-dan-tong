@@ -7,6 +7,7 @@
 import os
 import sys
 import json
+import inspect
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -16,6 +17,17 @@ from store import Store
 from agent import handle_message
 from llm import LLM
 from sim_chats import SCENARIO1_MOCK, SEED_MOCK, WEB_DEMO_SEED, WEB_SCENARIO_MOCKS
+
+# 模块四 C-2（#16）提供会话上下文清理；未合并时降级为 no-op，本文件无需再改。
+try:
+    from agent import reset_session_ctx
+except ImportError:                                    # pragma: no cover
+    def reset_session_ctx(*_a, **_k):
+        return None
+
+# 能力探测：C-1 的 force_colloquial / C-2 的 session_key 是 #15/#16 新增入参。
+# 先接好线，PR 合并后自动生效；合并完成后可删掉探测、直接传参。
+_HM_PARAMS = set(inspect.signature(handle_message).parameters)
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 INDEX = os.path.join(ROOT, "static", "index.html")
@@ -79,11 +91,23 @@ def _pick_mock(scenario, text):
     return SCENARIO1_MOCK
 
 
-def do_chat(text, scenario=None, sender=None):
+def do_chat(text, scenario=None, sender=None, sid=None, colloquial=False):
+    """处理一条消息。
+
+    sid：「会话 id」，多轮指代消解（C-2）的上下文隔离键。前端每个浏览器一个，
+         缺省 "default" 会让所有用户共享同一份「上一轮」，多人演示会串话。
+    colloquial：「口语化 开/关」开关（C-1），true 时无视 OU_COLLOQUIAL 强制改写。
+    """
+    # 只传 agent 真正支持的入参：C-1/C-2 未合并时自动降级，合后自动生效
+    extra = {}
+    if "force_colloquial" in _HM_PARAMS:
+        extra["force_colloquial"] = bool(colloquial)
+    if "session_key" in _HM_PARAMS:
+        extra["session_key"] = sid or "default"
     with _LOCK:
         mock = _pick_mock(scenario, text) if USE_MOCK else None
         try:
-            result = handle_message(text, _store, llm=_llm, mock=mock, sender=sender)
+            result = handle_message(text, _store, llm=_llm, mock=mock, sender=sender, **extra)
         except Exception as e:
             # 大模型网关超时/抖动（词元天下实测单次 18~50s，偶发撞满 timeout）：
             # 用该场景的预置抽取结果重跑一遍，让模块二的规则判定（异常/冲突/缺失/正常）
@@ -91,7 +115,8 @@ def do_chat(text, scenario=None, sender=None):
             fallback = _SCENARIO_MOCKS.get(scenario) if scenario else None
             if fallback is not None:
                 try:
-                    result = handle_message(text, _store, llm=None, mock=fallback, sender=sender)
+                    result = handle_message(text, _store, llm=None, mock=fallback,
+                                            sender=sender, **extra)
                     result["degraded"] = True
                     result["reply"] = result["reply"] + (
                         "\n\n⚡ 大模型网关本次响应超时（词元天下侧抖动，非本系统故障）。"
@@ -105,6 +130,12 @@ def do_chat(text, scenario=None, sender=None):
                           "reply": "⚠️ 大模型网关响应超时（词元天下侧抖动，非本系统故障）。"
                                    "可先问我「XX 那单到哪了」或「出今日简报」——"
                                    "查询与简报走本地规则引擎，不依赖大模型，能立即出结果。"}
+    # C-1 显式开关的诚实反馈：没配 Key 时口语化必然回退，必须说清楚，
+    # 否则用户按了「口语化 开」看不出任何变化，会判定功能没做。
+    if result.pop("colloquial_fallback", False):
+        result["reply"] = result["reply"] + (
+            "\n\n（口语化未生效：当前未配置 API Key，已按模板直出。"
+            "配置 DEEPSEEK_API_KEY 后可对比改写效果。）")
     result["ledger"] = ledger_state()
     # 模拟模式提示：未接入 API Key 时输入不真实解析、展示预置演示数据；
     # 配置 DEEPSEEK_API_KEY 后进入真实模式，此提示自动隐藏
@@ -154,12 +185,17 @@ class Handler(BaseHTTPRequestHandler):
                 payload = {}
             text = (payload.get("message") or "").strip()
             self._json(do_chat(text, scenario=payload.get("scenario"),
-                               sender=payload.get("sender")))
+                               sender=payload.get("sender"),
+                               sid=payload.get("sid"),
+                               colloquial=payload.get("colloquial")))
         elif self.path == "/api/reset":
             with _LOCK:
                 _store.reset()
                 # 两种模式都 re-seed 演示在途单，保证重置后冲突/更新/查单仍有演示对象
                 handle_message("__seed__", _store, llm=None, mock=WEB_DEMO_SEED)
+                # 清掉多轮指代上下文：重置后单号会从头复用，
+                # 不清的话「那单」可能指到重置后的同名新单上。
+                reset_session_ctx()
             self._json(ledger_state())
         else:
             self._send(404, "Not Found")

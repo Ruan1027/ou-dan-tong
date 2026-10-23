@@ -22,6 +22,11 @@
   .tab-btn.active { background:#fff; color:var(--brand2); }
   header .mode { margin-left:auto; font-size:12px; background:rgba(255,255,255,.18);
                 padding:4px 10px; border-radius:999px; }
+  /* 口语化开关（模块四 C-1）：默认关＝模板直出，勾上＝允许 LLM 改写 */
+  header .colloqui { display:flex; align-items:center; gap:6px; font-size:12px;
+                     background:rgba(255,255,255,.18); padding:4px 10px; border-radius:999px;
+                     cursor:pointer; user-select:none; }
+  header .colloqui input { margin:0; cursor:pointer; }
   main { flex:1; overflow:hidden; padding:14px; }
   .tab { display:none; height:100%; }
   .tab.active { display:flex; gap:14px; }
@@ -196,6 +201,9 @@
     <button class="tab-btn" onclick="switchTab('platform')">📊 平台汇总</button>
   </div>
   <div class="mode" id="modeBadge">加载中…</div>
+  <label class="colloqui" title="开启后查询/简报会经大模型改写成口语播报体（C-1）。默认关闭＝模板直出，更快、话术与判定一一对应。">
+    <input type="checkbox" id="colloquialToggle" /> 口语化
+  </label>
 </header>
 
 <main>
@@ -308,6 +316,26 @@ async function apiPost(path, body){
   return await r.json();
 }
 
+/* 会话 id（模块四 C-2）：多轮指代消解靠它隔离上下文。
+   同一浏览器保持同一个 id，换个标签页/换个人演示就是另一份上下文，不会串话。 */
+const SID = (function(){
+  try{
+    let v = localStorage.getItem("ou_sid");
+    if(!v){ v = "s" + Math.random().toString(36).slice(2,10); localStorage.setItem("ou_sid", v); }
+    return v;
+  }catch(e){ return "default"; }   /* 隐私模式禁用 localStorage 时退化为单会话 */
+})();
+
+/* 统一的对话请求：自动带上会话 id 与「口语化」开关，避免各调用点漏传。
+   漏传的两个后果都很难查：上下文串到别人那、口语化按钮点了没反应。 */
+function chatPost(body){
+  const t = el("colloquialToggle");
+  return apiPost("/api/chat", Object.assign({}, body, {
+    sid: SID,
+    colloquial: !!(t && t.checked)
+  }));
+}
+
 function switchTab(name){
   document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
   document.querySelectorAll(".tab-btn").forEach(b=>b.classList.remove("active"));
@@ -367,7 +395,7 @@ async function wxSend(text, scenario, sender){
   addWx("customer", text, null, sender);
   const pending = addWxPending();
   try{
-    const data = await apiPost("/api/chat", {message:text, scenario: scenario||null, sender: sender||null});
+    const data = await chatPost({message:text, scenario: scenario||null, sender: sender||null});
     pending.remove();
     addWx("agent", stripNote(data.reply||"（无回复）"), data.mode);
     if(data.ledger) renderPlatform(data.ledger);
@@ -471,7 +499,7 @@ async function doQuery(){
   }
   out.textContent = "⏳ 查询中…";
   try{
-    const data = await apiPost("/api/chat", {message:t});
+    const data = await chatPost({message:t});
     out.textContent = stripNote(data.reply||"（无结果）");
   }catch(e){
     out.textContent = "⚠️ 查询失败：" + e.message;
@@ -486,7 +514,7 @@ async function doBriefing(){
   const out = el("briefResult"); if(!out) return;
   out.textContent = "⏳ 正在生成简报…";
   try{
-    const data = await apiPost("/api/chat", {message:"出今日简报"});
+    const data = await chatPost({message:"出今日简报"});
     out.textContent = stripNote(data.reply||"（无结果）");
   }catch(e){
     out.textContent = "⚠️ 生成简报失败：" + e.message;

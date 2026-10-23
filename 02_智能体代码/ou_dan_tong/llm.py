@@ -9,8 +9,8 @@ from config import (
     OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL,
 )
 
-# 偶发网关抖动（502/503/超时）自动重试：演示时不能因为一次抖动就空回复
-_RETRYABLE = (502, 503, 504)
+# 偶发网关抖动（500/502/503/504/超时）自动重试：演示时不能因为一次抖动就空回复
+_RETRYABLE = (500, 502, 503, 504)
 _RETRIES = 3
 
 
@@ -53,7 +53,9 @@ class LLM:
                 last_err = e
                 if e.code not in _RETRYABLE or attempt == _RETRIES - 1:
                     raise
-            except (urllib.error.URLError, TimeoutError, OSError) as e:
+            except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
+                # 502/503/504、连接超时、以及网关偶发「200 + 空/HTML 体」导致的
+                # JSON 解析失败，均视为瞬时抖动重试，避免演示时空回复
                 last_err = e
                 if attempt == _RETRIES - 1:
                     raise

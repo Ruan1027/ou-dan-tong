@@ -116,6 +116,7 @@ def test_pipeline():
     ck.section("T6 冲突检测（不覆盖 + 标记可见）")
     s = Store(); s.reset()
     parse_chat("x", s, mock=SEED_MOCK, now=NOW)
+    n_before = len(s.orders)  # 不硬编码，容忍 SEED_MOCK 演示在途单数量变化
     base = next(o for o in s.orders if o["customer"] == "温州机电")
     qty_before = base["qty"]
     card, _ = parse_chat("x", s, mock=SCENARIO_CONFLICT_MOCK, now=NOW)
@@ -127,7 +128,7 @@ def test_pipeline():
           after["delivery_date"])
     ck.ok("conflict" in (after.get("flags") or {}), "T6 台账应可见 flags.conflict",
           after.get("flags"))
-    ck.ok(len(s.orders) == 2, "T6 冲突不应新增订单", len(s.orders))
+    ck.ok(len(s.orders) == n_before, "T6 冲突不应新增订单", len(s.orders))
 
     # ---------------- T7 异常拦截 ----------------
     ck.section("T7 异常拦截（不写入）")

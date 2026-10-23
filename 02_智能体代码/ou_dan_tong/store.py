@@ -81,8 +81,32 @@ def _now():
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
+def _longest_common_substring(a: str, b: str) -> str:
+    """返回 a、b 的最长公共子串（用于口语化简称/语序颠倒的模糊匹配）。
+    客户名/产品名都很短，O(n*m) DP 足够。"""
+    if not a or not b:
+        return ""
+    n, m = len(a), len(b)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    best, bi = 0, 0
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if a[i - 1] == b[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1] + 1
+                if dp[i][j] > best:
+                    best, bi = dp[i][j], i
+    return a[bi - best:bi] if best else ""
+
+
 def _fuzzy_eq(a: str, b: str) -> bool:
-    """简称包含式等价：互为子串即视为同一客户/产品（至少 2 字，防单字误命中）。"""
+    """口语化等价：互为子串，或共享 ≥4 字核心片段。
+
+    覆盖三类真实口语变形（关联到在途单时不再误判缺失/冲突）：
+    - 简称： 「王工」↔「王工（XX电气）」
+    - 后缀包裹：「NMX-60 那批」↔「NMX-60 断路器外壳」
+    - 语序颠倒：「XX电气的王工」↔「王工（XX电气）」
+    至少 2 字，防单字误命中。
+    """
     a, b = (a or "").strip(), (b or "").strip()
     if not a or not b:
         return False
@@ -90,7 +114,14 @@ def _fuzzy_eq(a: str, b: str) -> bool:
         return True
     short = a if len(a) <= len(b) else b
     long = b if short is a else a
-    return len(short) >= 2 and short in long
+    # 1) 互为子串（原逻辑，覆盖简称场景）
+    if len(short) >= 2 and short in long:
+        return True
+    # 2) 共享 ≥4 字核心片段（覆盖口语包裹 / 语序颠倒）
+    common = _longest_common_substring(a, b)
+    if len(common) >= 4:
+        return True
+    return False
 
 
 class Store:

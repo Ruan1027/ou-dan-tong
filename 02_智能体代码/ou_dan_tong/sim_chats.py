@@ -62,6 +62,14 @@ WEB_DEMO_SEED = [
     {"type": "order", "customer": "陈老板（瑞安汽配）", "product": "轴承 6204", "spec": "",
      "qty": 150, "unit_price": "7.0", "delivery_date": "2026-11-01", "status_hint": "已确认",
      "sample_flag": "无", "source_excerpt": "陈老板 轴承6204 150个 7.0 11-01交"},
+    # 下面两单用于演示「同一台账并存多种状态」（模块二状态机 沟通中→已报价→已确认→生产中→…），
+    # 否则台账里清一色「已确认」，评审看不到状态机在跑。
+    {"type": "order", "customer": "温州华信电器", "product": "继电器 JQX-13F", "spec": "",
+     "qty": 300, "unit_price": "待报价", "delivery_date": "2026-11-05", "status_hint": "沟通中",
+     "sample_flag": "无", "source_excerpt": "华信 继电器JQX-13F 300个 交期还没定"},
+    {"type": "order", "customer": "瑞安汽配", "product": "刹车片 ECE-900", "spec": "",
+     "qty": 80, "unit_price": "42", "delivery_date": "2026-10-30", "status_hint": "生产中",
+     "sample_flag": "无", "source_excerpt": "瑞安汽配 刹车片ECE-900 80个 42元 10-30交"},
 ]
 
 # 新建：全新客户+产品，字段齐全 → 正常建单
@@ -72,6 +80,8 @@ SCENARIO_NEW_MOCK = [
 ]
 
 # 更新：与在途单同客户+产品，且含变更动词「改成」→ 正常更新（不冲突）
+# 注：本套 SCENARIO_*_MOCK 配对 SEED_MOCK（温州机电/王工 XX电气），供 test_pipeline 等
+# 测试套件使用，**不要改动实体**；网页演示另用下方 WEB_SCENARIO_MOCKS（配 WEB_DEMO_SEED）。
 SCENARIO_UPDATE_MOCK = [
     {"type": "order", "customer": "王工（XX电气）", "product": "NMX-60 断路器外壳",
      "qty": 6000, "source_excerpt": "NMX-60 那批数量改成 6000 个"},
@@ -95,3 +105,36 @@ SCENARIO_ABNORMAL_MOCK = [
     {"type": "order", "customer": "温州机电", "product": "法兰盘",
      "qty": -50, "source_excerpt": "法兰盘 数量 -50（手滑多打了负号）"},
 ]
+
+
+# ---------------------------------------------------------------------------
+# 网页演示专用场景数据：实体与 WEB_DEMO_SEED 严格对齐
+# ---------------------------------------------------------------------------
+# 用途：① 模拟模式按场景取预置抽取；② 真实模式下大模型网关超时时，用它降级重跑，
+#      让模块二的规则判定（新建/更新/缺失/冲突/异常）照常产出结论，而不是甩 TimeoutError。
+# 若实体与 WEB_DEMO_SEED 不一致，find_active 命中不了在途单，更新/冲突会被误判成
+# 「信息不全占位」——改这里必须同步核对上面的 WEB_DEMO_SEED。
+WEB_SCENARIO_MOCKS = {
+    "new": [
+        {"type": "order", "customer": "阿珍（鹿城鞋材）", "product": "EVA 鞋底", "spec": "秋季款发泡",
+         "qty": 800, "unit_price": "待报价", "delivery_date": "2026-11-10", "status_hint": "沟通中",
+         "sample_flag": "无", "source_excerpt": "老周，秋季那款运动鞋鞋底 EVA 发泡的，先给我 800 双，最好 11 月 10 号前到"},
+    ],
+    "update": [
+        {"type": "order", "customer": "李姐（瓯越五金贸易）", "product": "DZ47-63 三相断路器",
+         "qty": 80, "source_excerpt": "小陈，DZ47 那个加到 80 个"},
+    ],
+    "missing": [
+        {"type": "order", "customer": "王总（永嘉精密机械）", "product": "304法兰盘 DN80", "spec": "",
+         "qty": None, "unit_price": "待报价", "delivery_date": None, "status_hint": "沟通中",
+         "sample_flag": "无", "source_excerpt": "小陈，法兰那批的货再帮我排上一批，我这边急"},
+    ],
+    "conflict": [
+        {"type": "order", "customer": "王总（永嘉精密机械）", "product": "304法兰盘 DN80",
+         "unit_price": "18", "source_excerpt": "小陈，法兰 DN80 那单单价你按 18 算，上次说好的"},
+    ],
+    "abnormal": [
+        {"type": "order", "customer": "李姐（瓯越五金贸易）", "product": "DZ47-63 三相断路器",
+         "qty": -300, "source_excerpt": "小陈，DZ47 那个数量给我改成 -300"},
+    ],
+}

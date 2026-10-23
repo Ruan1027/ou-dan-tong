@@ -526,6 +526,16 @@ function histHtml(hist){
   }).join("") + `</div>`;
 }
 
+/* 分批交期展示（C-13）：台账必须看得见「分几批、每批多少、各什么时候交」。
+   否则客户说的「分两批：11-01 出 500，11-03 出 400」在屏上只剩一个总数和最终日期，
+   等于分批这件事没被记录。 */
+function batchNote(o){
+  const bs = o && o.delivery_batches;
+  if(!Array.isArray(bs) || !bs.length) return "";
+  const items = bs.map(b=>`${String(b.date||"").slice(5)}×${b.qty}`).join(" / ");
+  return `<div class="cap">分 ${bs.length} 批：${items}</div>`;
+}
+
 function orderRows(orders){
   /* 追加单必须一眼可辨：单号后打「追加」徽章，并在交期下注明追加自哪一单 */
   return orders.map(o=>{
@@ -540,7 +550,7 @@ function orderRows(orders){
       ` title="展开 / 收起本单变更履历"><span class="arw">${open ? "▾" : "▸"}</span>变更履历 ${hist.length}</button>` : '';
     const row = `<tr class="orow" data-oid="${esc(oid)}"><td>${esc(oid)}${tag}${histBtn}</td>`+
       `<td>${esc(o.customer)}</td>`+
-      `<td>${esc(o.product)}</td><td>${esc(o.qty)}</td><td>${esc(o.delivery_date||"—")}${from}</td>`+
+      `<td>${esc(o.product)}</td><td>${esc(o.qty)}</td><td>${esc(o.delivery_date||"—")}${batchNote(o)}${from}</td>`+
       `<td><span class="badge b-${esc(o.status)}">${esc(o.status)}</span></td></tr>`;
     const child = hist.length ? `<tr class="hist-row${open ? "" : " hidden"}" data-for="${esc(oid)}">`+
       `<td colspan="6">${histHtml(hist)}</td></tr>` : '';

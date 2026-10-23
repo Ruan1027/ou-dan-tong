@@ -49,15 +49,30 @@ BRIEFING_SYSTEM = """把以下聚合数据汇总成一份简洁的今日订单�
 # 状态机单一真相源：直接复用 contracts.py（避免两份定义漂移，见 BUG-11 修复）
 # 交期同理：分批单的「该交付日」= 最晚批次日，统一走 contracts.effective_delivery_date
 from contracts import (STATUS_ORDER, STATUS_RANK, TERMINAL_STATUSES,  # noqa: E402,F401
-                       effective_delivery_date)
+                       effective_delivery_date, valid_batches)
+
+
+def batch_brief(order: dict) -> str:
+    """分批交期的人类可读摘要（C-13）：「分 2 批：11-01×500 / 11-03×400」。
+
+    台账 / 卡片 / 查询都必须带上这句 —— 只显示总数和最终日期，
+    等于客户说的「分两批」根本没被记录，屏上完全看不出交付节奏。
+    """
+    bs = valid_batches(order)
+    if not bs:
+        return ""
+    return "分 %d 批：%s" % (len(bs), " / ".join(f"{b['date'][5:]}×{b['qty']}" for b in bs))
 
 
 def card_text(order: dict, tasks: list, is_new: bool) -> str:
     tag = "已登记新订单" if is_new else "已更新订单"
+    _note = batch_brief(order)
     lines = [
         f"✅ {tag} {order['order_id']}",
         f"📦 客户：{order['customer']}｜产品：{order['product']} {order.get('spec','')} ×{order.get('qty','?')}",
-        f"💰 单价 {order.get('unit_price','待报价')} ｜ 📅 交期 {effective_delivery_date(order) or '待定'} ｜ 状态：{order.get('status')}",
+        f"💰 单价 {order.get('unit_price','待报价')} ｜ 📅 交期 {effective_delivery_date(order) or '待定'}"
+        + (f"（{_note}）" if _note else "")
+        + f" ｜ 状态：{order.get('status')}",
     ]
     if tasks:
         t = "；".join(f"{x['content']}" + (f"（{x['owner']}）" if x.get('owner') else "（待认领）") for x in tasks)
@@ -76,10 +91,13 @@ def append_card_text(order: dict) -> str:
     pid = order.get("parent_order_id") or ""
     head = f"📥 已登记追加单 {order['order_id']}"
     head += f"（追加自 {pid}，原单不改动）" if pid else ""
+    _note = batch_brief(order)
     lines = [
         head,
         f"📦 客户：{order['customer']}｜产品：{order['product']} {order.get('spec','')} ×{order.get('qty','?')}",
-        f"💰 单价 {order.get('unit_price','待报价')} ｜ 📅 交期 {effective_delivery_date(order) or '待定'} ｜ 状态：{order.get('status')}",
+        f"💰 单价 {order.get('unit_price','待报价')} ｜ 📅 交期 {effective_delivery_date(order) or '待定'}"
+        + (f"（{_note}）" if _note else "")
+        + f" ｜ 状态：{order.get('status')}",
     ]
     if order.get("source_excerpt"):
         lines.append(f"📎 依据：\"{order['source_excerpt']}\"")
@@ -87,8 +105,10 @@ def append_card_text(order: dict) -> str:
 
 
 def query_text(order: dict, suggestion: str = "") -> str:
+    _note = batch_brief(order)
     base = (f"{order['customer']}的{order['product']} {order.get('spec','')} ×{order.get('qty','?')}，"
-            f"当前状态{order.get('status')}，预计{effective_delivery_date(order) or '待定'}交付。")
+            f"当前状态{order.get('status')}，预计{effective_delivery_date(order) or '待定'}交付"
+            + (f"（{_note}）" if _note else "") + "。")
     ev = f"📎 依据：\"{order.get('source_excerpt','')}\"。" if order.get("source_excerpt") else ""
     return base + ev + (suggestion and f" {suggestion}")
 

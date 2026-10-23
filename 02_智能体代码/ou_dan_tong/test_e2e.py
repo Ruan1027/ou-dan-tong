@@ -160,26 +160,31 @@ def run():
         ck.ok("补" in reply or "请" in reply, "给出可执行的补全引导", reply[:80])
 
         # ---------- S6 更新：命中已有单，不重复建单 ----------
+        # ⚠️ 实体必须与 sim_chats.WEB_DEMO_SEED 对齐（2026-10-23 修正）：
+        # 演示 seed 已从「王工/NMX-60」换成模块一真实实体（王总/李姐/陈老板…），
+        # 本脚本原先断言的 NMX-60 已不在台账里，导致 qty=None 误判。
+        # 现在用 seed 中的「李姐（瓯越五金贸易）/ DZ47-63 三相断路器」（预置 50），
+        # 配 scenario="update"（预置抽取 80）→ 期望更新为 80。
         print("\n[S6] 粘贴更新消息（评委点名：最新状态 + 留痕）")
         before = len(c.ledger().get("orders", []))
-        r = c.chat("NMX-60 数量改成 6000", scenario="update")
+        r = c.chat("小陈，DZ47 那个加到 80 个", scenario="update")
         reply = r.get("reply", "")
         ck.ok("✅" in reply or "已更新" in reply, "卡片呈现更新成功话术", reply[:80])
         after = len(c.ledger().get("orders", []))
         ck.ok(after == before, f"更新不重复建单（{before} → {after}）", f"{before}→{after}")
-        nmx = next((o for o in c.ledger().get("orders", [])
-                    if "NMX-60" in str(o.get("product", ""))), None)
-        ck.ok(nmx is not None and nmx.get("qty") == 6000,
-              "台账数量已更新为 6000",
-              f"qty={nmx and nmx.get('qty')}")
-        ck.ok(nmx is not None and len(nmx.get("changes", [])) >= 1,
-              "变更留痕已记录", f"changes={nmx and len(nmx.get('changes', []))}")
+        dz = next((o for o in c.ledger().get("orders", [])
+                   if "DZ47" in str(o.get("product", ""))), None)
+        ck.ok(dz is not None and dz.get("qty") == 80,
+              "台账数量已更新为 80（预置 50 → 80）",
+              f"qty={dz and dz.get('qty')}")
+        ck.ok(dz is not None and len(dz.get("changes", [])) >= 1,
+              "变更留痕已记录", f"changes={dz and len(dz.get('changes', []))}")
 
         # ---------- S7 查询：返回最新态而非旧版 ----------
         print("\n[S7] 问「那单到哪了」（评委点名：最新状态）")
-        r = c.chat("NMX-60 那单到哪了？")
+        r = c.chat("DZ47 那单到哪了？")
         reply = r.get("reply", "")
-        ck.ok("6000" in reply, "查询返回最新数量 6000（而非旧版）", reply[:80])
+        ck.ok("80" in reply, "查询返回最新数量 80（而非旧版 50）", reply[:80])
 
         # ---------- S8 简报：四类统计 ----------
         print("\n[S8] 说「出今日简报」")
@@ -192,9 +197,9 @@ def run():
         # ---------- S9 幂等回归（REG-01） ----------
         print("\n[S9] 幂等回归：重复导入同一消息不重复入库")
         before = len(c.ledger().get("orders", []))
-        c.chat("NMX-60 数量改成 6000", scenario="update")
+        c.chat("小陈，DZ47 那个加到 80 个", scenario="update")
         mid = len(c.ledger().get("orders", []))
-        c.chat("NMX-60 数量改成 6000", scenario="update")
+        c.chat("小陈，DZ47 那个加到 80 个", scenario="update")
         after = len(c.ledger().get("orders", []))
         ck.ok(before == mid == after,
               f"重复导入台账条数不变（{before} → {mid} → {after}）",

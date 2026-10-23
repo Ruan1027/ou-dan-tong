@@ -133,6 +133,7 @@ def _days_to(date_str):
 # ---- C-2：多轮指代消解（进程内会话上下文，10 分钟过期，不引外部存储）----
 _SESSION_CTX = {}      # {session_key: {"order_ids": [...], "ts": time.time()}}
 _CTX_TTL = 600         # 秒；过期即失效，指代词回退全表匹配
+_CTX_MAX = 500         # C-2：上限，防止大量一次性 session_key 常驻内存（无主动回收路径）
 _PRONOUNS = ("那单", "这单", "这一单", "那一单", "刚才那单", "刚才的单", "刚刚那单")
 
 
@@ -189,12 +190,23 @@ def _resolve_scope(q: str, store: Store, session_key: str):
 
 
 def _remember_ctx(session_key: str, trace: dict):
-    """C-2：把本轮命中的订单写进会话上下文；本轮没命中则清掉，避免污染下一句。"""
+    """C-2：把本轮命中的订单写进会话上下文；本轮没命中则清掉，避免污染下一句。
+
+    淘汰策略（审查 C-2 修复）：过期条目原本只在「同一个 key 再问一次」时才删，
+    大量一次性 session_key（网页每次刷新一个新 id）会常驻内存。这里在写入前先清过期，
+    仍超上限则淘汰最早写入的一条（dict 3.7+ 保持插入顺序）。
+    """
     ids = trace.get("order_ids") or []
-    if ids:
-        _SESSION_CTX[session_key] = {"order_ids": list(ids), "ts": time.time()}
-    else:
+    if not ids:
         _SESSION_CTX.pop(session_key, None)
+        return
+    if len(_SESSION_CTX) >= _CTX_MAX:
+        now = time.time()
+        for k in [k for k, v in _SESSION_CTX.items() if now - v.get("ts", 0) > _CTX_TTL]:
+            _SESSION_CTX.pop(k, None)
+        if len(_SESSION_CTX) >= _CTX_MAX:
+            _SESSION_CTX.pop(next(iter(_SESSION_CTX)))
+    _SESSION_CTX[session_key] = {"order_ids": list(ids), "ts": time.time()}
 
 
 # ---- C-3：查询链路日志（默认关，OU_QUERY_LOG=1 开启；只用标准库 print）----
@@ -245,8 +257,7 @@ def _query_body(question, store: Store, llm: LLM = None, scope=None, meta=None):
         return briefing(store, llm)
 
     # ---- 模块四·4：历史追溯分支（识别"改过/历史/变更/履历/几次"等意图）----
-    _HISTORY_MARKERS = ("改过", "历史", "变更", "履历", "几次", "改了什么", "改了啥",
-                        "变更记录", "变更历史", "改动", "修改记录", "怎么改的")
+    # C-4：词表已提到模块级 _HISTORY_MARKERS（handle_message 也要用同一份，避免两处漂移）
     is_history_query = any(k in q for k in _HISTORY_MARKERS)
 
     # ---- 模块四·1：查询解析增强（命中键 客户/产品/规格/状态 + 时间区间 + 相关度排序）----
@@ -372,9 +383,16 @@ def _query_body(question, store: Store, llm: LLM = None, scope=None, meta=None):
         meta["clarify"] = True
         meta["n"] = top_n
         meta["order_ids"] = [o["order_id"] for o, _ in candidates[:top_n]]
-        lines = [f"🤔 找到 {top_n} 单都匹配，请补充产品名或订单号精确定位："]
+        # 审查 C-3：已经是 scope（上一轮命中的那几单）时再问一次「请补充产品名」等于原地打转，
+        # 用户说「那单」本身就是不想指认。改成「就是这几单，您说的是哪一单」并补状态/交期差异，
+        # 让用户按差异指认，而不是重复同一句反问。
+        if scope:
+            lines = [f"🤔 就是这 {top_n} 单，您说的是哪一单？（回单号或产品名都行）"]
+        else:
+            lines = [f"🤔 找到 {top_n} 单都匹配，请补充产品名或订单号精确定位："]
         for i, (o, _) in enumerate(candidates[:top_n], 1):
-            lines.append(f"{i}. {o['order_id']} {o['customer']}/{o['product']}（状态{o.get('status')}）")
+            lines.append(f"{i}. {o['order_id']} {o['customer']}/{o['product']}"
+                         f"（状态{o.get('status')}，交期{o.get('delivery_date') or '待定'}）")
         return "\n".join(lines)
 
     lines = []
@@ -655,6 +673,11 @@ _QUERY_MARKERS = ("到哪", "状态", "查", "进度", "什么时候交", "几�
                  "变更记录", "变更历史", "改动", "修改记录")
 _BRIEFING_MARKERS = ("简报", "今天情况", "今日", "整体情况", "汇总", "今天有哪些")
 
+# 审查 C-4：历史追随意图词表提到模块级——handle_message 需要在 `_looks_like_order` 之前
+# 先按历史意图分流，否则「改过啥」里的「改」会被 contracts.CHANGE_VERBS 判成改单指令。
+_HISTORY_MARKERS = ("改过", "历史", "变更", "履历", "几次", "改了什么", "改了啥",
+                    "变更记录", "变更历史", "改动", "修改记录", "怎么改的")
+
 
 # 订单/改单意图优先判定：含变更动词或明确的数量/价格数值主张时，即便夹带
 # 「那单/的单」等查询词，也按群聊指令解析，而非当成查单问句。
@@ -671,6 +694,16 @@ def _looks_like_order(t: str) -> bool:
     if _ORDER_PRICE_RE.search(t):
         return True
     return False
+
+
+def _has_amount_claim(t: str) -> bool:
+    """C-4：这句里有没有数量/价格主张（真正的「下单/改单」才有的东西）。
+
+    用它而不是 `_looks_like_order` 来区分历史追问：CHANGE_VERBS 含单字「改」，
+    「法兰盘改过啥」也会被 `_looks_like_order` 判成改单，导致历史查询走不到查询分支、
+    无 Key 时直接抛 RuntimeError。
+    """
+    return bool(_ORDER_QTY_RE.search(t) or _ORDER_PRICE_RE.search(t))
 
 
 def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str = None,
@@ -695,6 +728,21 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str =
         out = {"mode": "briefing", "reply": reply}
         if force_colloquial and reply is ans:
             out["colloquial_fallback"] = True   # 供前端提示「口语化未生效」
+        return out
+    # 审查 C-4：历史追溯优先于改单意图——「改过啥/变更历史」本身带「改」字，会被
+    # `_looks_like_order` 判成改单去走 parse_chat（无 Key 直接抛错），必须在这之前分流。
+    # 守卫用「无数量/价格主张」而不是 `not _looks_like_order`：后者恒为假（「改」必命中）。
+    if any(k in t for k in _HISTORY_MARKERS) and not _has_amount_claim(t):
+        if force_colloquial and llm is None:
+            llm = _safe_llm()
+        scope = _resolve_scope(t, store, session_key)
+        trace = {}
+        ans = query(t, store, llm, scope=scope, trace=trace)
+        _remember_ctx(session_key, trace)
+        reply = _colloquialize(ans, llm, force=force_colloquial)
+        out = {"mode": "query", "reply": reply}
+        if force_colloquial and reply is ans:
+            out["colloquial_fallback"] = True
         return out
     # 订单/改单意图优先：含变更动词或数量/价格数值主张时，即使带「那单」也按群聊解析
     if _looks_like_order(t):

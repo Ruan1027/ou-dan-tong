@@ -555,6 +555,61 @@ def test_module4():
         _agent_mod._COLLOQUIAL_ON = _sw56
         _am.LLM = _llm56
 
+    # ---- 审查 C-2：_SESSION_CTX 必须有淘汰上限 ----
+    # 场景57：上限临时改为 3，写 5 个不同 session_key 后常驻条目不得超限
+    reset_session_ctx()
+    _cap_bak = _am._CTX_MAX
+    _am._CTX_MAX = 3
+    try:
+        store.reset()
+        parse_chat("dummy", store, mock=[{
+            "type": "order", "customer": "温州机电", "product": "法兰盘",
+            "qty": 300, "delivery_date": "2026-12-01", "source_excerpt": "法兰盘 300 个"}])
+        for _i in range(5):
+            handle_message("法兰盘那单到哪了", store, session_key=f"u{_i}")
+        assert len(_am._SESSION_CTX) <= 3, \
+            f"C-2: 上下文必须有上限，实际常驻 {len(_am._SESSION_CTX)} 条"
+    finally:
+        _am._CTX_MAX = _cap_bak
+        reset_session_ctx()
+
+    # ---- 审查 C-3：澄清后用「那单」追问不得原地打转 ----
+    # 场景58：同客户 2 单 → 先澄清 → 再问「那单的交付日期呢」→ 换成「就是这 2 单」
+    #   并给出交期差异，而不是重复同一句「请补充产品名」
+    reset_session_ctx()
+    store.reset()
+    parse_chat("dummy", store, mock=[
+        {"type": "order", "customer": "温州机电", "product": "法兰盘", "qty": 300,
+         "delivery_date": "2026-12-01", "source_excerpt": "法兰盘 300 个 12-01 交"},
+        {"type": "order", "customer": "温州机电", "product": "阀体", "qty": 200,
+         "delivery_date": "2026-12-15", "source_excerpt": "阀体 200 个 12-15 交"},
+    ])
+    _r58a = handle_message("温州机电 到哪了", store, session_key="c3")
+    assert "请补充产品名" in _r58a["reply"], f"C-3 前置：首轮应澄清: {_r58a['reply']!r}"
+    _r58b = handle_message("那单的交付日期呢", store, session_key="c3")
+    assert "请补充产品名" not in _r58b["reply"], \
+        f"C-3: 已在上轮范围内不得重复澄清: {_r58b['reply']!r}"
+    assert "就是这 2 单" in _r58b["reply"], f"C-3: 应改为「就是这 N 单」: {_r58b['reply']!r}"
+    assert "2026-12-01" in _r58b["reply"] and "2026-12-15" in _r58b["reply"], \
+        f"C-3: 应给出两单交期差异供指认: {_r58b['reply']!r}"
+
+    # ---- 审查 C-4：历史查询经 handle_message 不得被改单意图吃掉 ----
+    # 场景59：无 Key（llm=None）问「法兰盘改过啥」→ 走 query、出履历、不抛 RuntimeError
+    store.reset()
+    parse_chat("dummy", store, mock=[{
+        "type": "order", "customer": "温州机电", "product": "法兰盘",
+        "qty": 300, "delivery_date": "2026-12-01", "source_excerpt": "法兰盘 300 个"}])
+    _r59 = handle_message("法兰盘改过啥", store, llm=None)
+    assert _r59["mode"] == "query", f"C-4: 历史追问应走查询分支，实际 {_r59['mode']}"
+    assert "变更履历" in _r59["reply"], f"C-4: 应输出变更履历: {_r59['reply']!r}"
+
+    # 场景60：反向守卫——带数量主张的「改成 500 个，改过没有」仍按改单解析
+    _r60 = handle_message("法兰盘改成 500 个，改过没有", store, llm=None,
+                          mock=[{"type": "order", "customer": "温州机电", "product": "法兰盘",
+                                 "qty": 500, "delivery_date": "2026-12-01",
+                                 "source_excerpt": "法兰盘改成 500 个"}])
+    assert _r60["mode"] == "parse", f"C-4: 带数量主张应仍走改单解析，实际 {_r60['mode']}"
+
     print("ALL TESTS PASSED ✅")
     print("-" * 40)
     print(b)
@@ -705,7 +760,15 @@ def smoke():
     finally:
         _agent_mod.LLM = _llm_bak
 
-    print(f"SMOKE TESTS PASSED ✅（{time.time() - t0:.2f}s，15 个检查点）")
+    # ⑮ C-4 审查修复：历史追问「改过啥」走查询分支，不被 CHANGE_VERBS 的「改」抢成改单
+    parse_chat("dummy", store, mock=[{
+        "type": "order", "customer": "温州机电", "product": "法兰盘",
+        "qty": 300, "delivery_date": "2026-12-01", "source_excerpt": "法兰盘 300 个"}])
+    _r15 = _hm("法兰盘改过啥", store, llm=None)
+    assert _r15["mode"] == "query" and "变更履历" in _r15["reply"], \
+        f"C-4: 历史追问必须走查询并出履历: {_r15}"
+
+    print(f"SMOKE TESTS PASSED ✅（{time.time() - t0:.2f}s，16 个检查点）")
 
 
 if __name__ == "__main__":

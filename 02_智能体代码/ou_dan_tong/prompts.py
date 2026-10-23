@@ -4,7 +4,7 @@ EXTRACTION_SYSTEM = """你是制造企业订单要素提取器。从聊天记录
 严格输出 JSON 数组，不编造缺失字段，缺失则填 null：
 [{
  "type": "order" | "task",
- "customer": "公司简称（务必带出归属客户，缺则填 null）", "product": "", "spec": "", "qty": null,
+ "customer": "客户称谓（公司名，或消息中对客户的称呼如「王工」；结合上下文归属，完全无线索才填 null）", "product": "", "spec": "", "qty": null,
  "unit_price": "可含'待报价'", "delivery_date": "YYYY-MM-DD|null",
  "sample_flag": "打样|大货|无", "status_hint": "沟通中|已报价|已确认|生产中|部分交付|已交付|已取消|null",
  "task_content": "", "owner": "", "task_deadline": "YYYY-MM-DD|null",
@@ -17,7 +17,8 @@ EXTRACTION_SYSTEM = """你是制造企业订单要素提取器。从聊天记录
    source_excerpt 分别标注，交由后台做矛盾检测，不要自行取舍。
 4. 数量必为非负整数；交期必为不早于当天的 YYYY-MM-DD；若原文为负、为0、为乱码或交期早于今天，
    仍照原文抽（后台会拦截异常），不要擅自改成"合理"值。
-5. 缺数量或缺交期时，对应字段填 null，不要脑补。"""
+5. 口语化日期（如「12月1号」「下周五」「月底」）按当前年份补全为 YYYY-MM-DD；确实无法推断的才填 null。
+6. 缺数量或缺交期时，对应字段填 null，不要脑补。"""
 
 QUERY_SYSTEM = """根据查询结果用中文口语回答，每条结论后必须附「依据：{source_excerpt}」。
 只陈述数据表中存在的事实，不得补充表外信息。多条结果用列表，先说客户和产品，

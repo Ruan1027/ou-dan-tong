@@ -7,166 +7,349 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   :root { --bg:#f4f6fb; --card:#fff; --brand:#2563eb; --brand2:#1e40af;
-          --ok:#16a34a; --warn:#dc2626; --muted:#64748b; --line:#e5e7eb; }
+          --ok:#16a34a; --warn:#dc2626; --muted:#64748b; --line:#e5e7eb;
+          --wx-bg:#ededed; --wx-in:#ffffff; --wx-out:#95ec69; --wx-head:#ededed; }
   body { font-family: -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
          background: var(--bg); color:#0f172a; height:100vh; display:flex; flex-direction:column; }
+  /* —— 顶栏 + 分页签 —— */
   header { background: linear-gradient(135deg,var(--brand),var(--brand2)); color:#fff;
-           padding:14px 18px; display:flex; align-items:center; gap:12px; }
-  header .logo { font-size:22px; font-weight:800; letter-spacing:1px; }
+           padding:0 18px; display:flex; align-items:center; gap:14px; height:58px; flex-shrink:0; }
+  header .logo { font-size:20px; font-weight:800; letter-spacing:1px; }
   header .tag { font-size:12px; opacity:.9; }
+  .tabs { display:flex; gap:8px; margin-left:18px; }
+  .tab-btn { background:rgba(255,255,255,.16); color:#fff; border:none; border-radius:999px;
+             padding:6px 16px; font-size:13.5px; font-weight:600; cursor:pointer; }
+  .tab-btn.active { background:#fff; color:var(--brand2); }
   header .mode { margin-left:auto; font-size:12px; background:rgba(255,255,255,.18);
                 padding:4px 10px; border-radius:999px; }
-  .wrap { flex:1; display:flex; gap:14px; padding:14px; overflow:hidden; }
-  .left { flex:1; display:flex; flex-direction:column; min-width:0; }
-  .chat { flex:1; background:var(--card); border-radius:14px; padding:16px; overflow-y:auto;
-          border:1px solid var(--line); }
-  .msg { max-width:88%; margin-bottom:12px; padding:10px 13px; border-radius:12px; line-height:1.55;
-         white-space:pre-wrap; word-break:break-word; font-size:14px; }
-  .msg.user { background:var(--brand); color:#fff; margin-left:auto; border-bottom-right-radius:3px; }
-  .msg.bot  { background:#eef2ff; color:#0f172a; border-bottom-left-radius:3px; }
-  .msg.bot .mode-tag { display:inline-block; font-size:11px; color:var(--brand2); font-weight:700;
-                      margin-bottom:4px; }
-  .inputbar { display:flex; gap:8px; margin-top:12px; }
-  textarea { flex:1; resize:none; height:46px; border:1px solid var(--line); border-radius:10px;
-             padding:10px 12px; font-size:14px; font-family:inherit; }
-  button { border:none; border-radius:10px; padding:0 18px; font-size:14px; font-weight:600;
-           cursor:pointer; }
-  .send { background:var(--brand); color:#fff; }
-  .reset { background:#fee2e2; color:var(--warn); }
-  .right { width:340px; display:flex; flex-direction:column; gap:14px; overflow-y:auto; }
+  main { flex:1; overflow:hidden; padding:14px; }
+  .tab { display:none; height:100%; }
+  .tab.active { display:flex; gap:14px; }
+
+  /* ========== Tab1 · 微信沟通模拟 ========== */
+  .wechat { flex:1; min-width:0; display:flex; flex-direction:column; background:var(--wx-bg);
+            border-radius:14px; overflow:hidden; border:1px solid var(--line); }
+  .wx-head { background:var(--wx-head); padding:10px 14px; font-size:14px; font-weight:600;
+             color:#1f2937; border-bottom:1px solid #e0e0e0; display:flex; align-items:center; gap:8px; }
+  .wx-head .dot { width:8px; height:8px; border-radius:50%; background:var(--ok); }
+  .wx-note { background:#fffbeb; color:#92600a; font-size:12px; padding:6px 14px; border-bottom:1px solid #fde68a; }
+  .wx-chat { flex:1; overflow-y:auto; padding:16px 14px; }
+  .row { display:flex; gap:8px; margin-bottom:14px; align-items:flex-start; }
+  .row.customer { flex-direction:row; }
+  .row.agent { flex-direction:row-reverse; }
+  .avatar { width:38px; height:38px; border-radius:6px; flex-shrink:0; display:flex;
+            align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#fff; }
+  .avatar.cust { background:#94a3b8; }
+  .avatar.agent { background:var(--brand); }
+  /* 消息列：宽度约束放列上，气泡本身自适应内容；保证气泡边缘始终贴头像 */
+  .col { display:flex; flex-direction:column; max-width:74%; min-width:0; }
+  .row.customer .col { align-items:flex-start; }
+  .row.agent .col { align-items:flex-end; }
+  .bubble { max-width:100%; padding:9px 12px; border-radius:8px; line-height:1.55; font-size:14px;
+            white-space:pre-wrap; word-break:break-word; position:relative; }
+  .row.customer .bubble { background:var(--wx-in); color:#111; border-top-left-radius:2px; }
+  .row.agent .bubble { background:var(--wx-out); color:#111; border-top-right-radius:2px; }
+  .cap { font-size:11px; color:var(--muted); margin-bottom:3px; }
+  .row.customer .cap { text-align:left; }
+  .row.agent .cap { text-align:right; }
+  .wx-actions { display:flex; flex-wrap:wrap; gap:8px; padding:10px 14px; background:var(--wx-head);
+                border-top:1px solid #e0e0e0; }
+  .wx-actions .lbl { width:100%; font-size:11.5px; color:var(--muted); }
+  .cbtn { border:1px solid #cbd5e1; background:#fff; color:#0f172a; border-radius:10px;
+          padding:8px 12px; font-size:13px; font-weight:600; cursor:pointer; }
+  .cbtn:hover { background:#f1f5f9; }
+  .wx-input { display:flex; gap:8px; padding:10px 14px; background:#f7f7f7; border-top:1px solid #e0e0e0; }
+  .wx-input textarea { flex:1; resize:none; height:42px; border:1px solid var(--line); border-radius:10px;
+                       padding:9px 12px; font-size:14px; font-family:inherit; }
+  .wx-input button { border:none; border-radius:10px; padding:0 18px; font-weight:600; cursor:pointer;
+                     background:var(--brand); color:#fff; }
+
+  /* ========== 平台汇总面板 ========== */
   .panel { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; }
   .panel h3 { font-size:14px; margin-bottom:10px; color:var(--brand2); }
   .panel h3 small { color:var(--muted); font-weight:400; }
   table { width:100%; border-collapse:collapse; font-size:12.5px; }
   th,td { text-align:left; padding:6px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
   th { color:var(--muted); font-weight:600; }
-  .chips { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
-  .chip { background:#e0e7ff; color:var(--brand2); border:1px solid #c7d2fe; border-radius:999px;
-          padding:6px 12px; font-size:12.5px; cursor:pointer; }
-  .chip:hover { background:#c7d2fe; }
-  .empty { color:var(--muted); font-size:12.5px; }
-  .badge { display:inline-block; font-size:11px; padding:1px 7px; border-radius:999px; }
+  .badge { display:inline-block; font-size:11px; padding:1px 7px; border-radius:999px; white-space:nowrap; }
   .b-沟通中{background:#fef9c3;color:#854d0e;} .b-已报价{background:#dbeafe;color:#1e40af;}
   .b-已确认{background:#ede9fe;color:#5b21b6;} .b-生产中{background:#dcfce7;color:#166534;}
-  .b-已交付{background:#e2e8f0;color:#475569;}
-  @media (max-width:760px){ .right{ display:none; } }
+  .b-已交付{background:#e2e8f0;color:#475569;} .b-部分交付{background:#ffedd5;color:#9a3412;}
+  .b-待补充{background:#fee2e2;color:#b91c1c;} .b-已取消{background:#f1f5f9;color:#64748b;}
+  .empty { color:var(--muted); font-size:12.5px; }
+
+  /* ========== Tab2 · 平台汇总 ========== */
+  /* 覆盖 .tab.active 的横向默认：平台页固定为纵向三段，宽度不随数据变化 */
+  #tab-platform { flex-direction:column; overflow-y:auto; gap:14px; }
+  .stats { display:flex; gap:12px; flex-wrap:wrap; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:14px;
+          padding:14px 0; width:118px; text-align:center; flex-shrink:0; }
+  .stat .n { font-size:24px; font-weight:800; color:var(--brand2); }
+  .stat .t { font-size:12.5px; color:var(--muted); margin-top:2px; }
+  /* 双栏台账：固定比例，不随内容伸缩 */
+  .grid2 { display:flex; gap:14px; flex-wrap:nowrap; }
+  .grid2 .panel { min-width:0; }
+  .grid2 .panel:first-child { flex:0 0 58%; }
+  .grid2 .panel:last-child  { flex:1; }
+  /* 台账表固定列宽（table-layout:fixed），数据增减不改变布局 */
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  #pOrderTable table, #pTaskTable table { table-layout:fixed; }
+  #pOrderTable th:nth-child(1){width:19%} #pOrderTable th:nth-child(2){width:16%}
+  #pOrderTable th:nth-child(3){width:19%} #pOrderTable th:nth-child(4){width:10%}
+  #pOrderTable th:nth-child(5){width:17%} #pOrderTable th:nth-child(6){width:19%}
+  #pTaskTable th:nth-child(1){width:40%} #pTaskTable th:nth-child(2){width:18%}
+  #pTaskTable th:nth-child(3){width:22%} #pTaskTable th:nth-child(4){width:20%}
+  td { overflow-wrap:anywhere; }
+  .query-box { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .query-box input { flex:1; min-width:200px; height:42px; border:1px solid var(--line); border-radius:10px;
+                     padding:0 12px; font-size:14px; font-family:inherit; }
+  .query-box button { border:none; border-radius:10px; padding:0 18px; height:42px; font-weight:600;
+                      cursor:pointer; background:var(--brand); color:#fff; }
+  .qchip { background:#e0e7ff; color:var(--brand2); border:1px solid #c7d2fe; border-radius:999px;
+           padding:5px 12px; font-size:12.5px; cursor:pointer; }
+  .qchip:hover { background:#c7d2fe; }
+  .result { margin-top:12px; background:#f8fafc; border:1px dashed var(--line); border-radius:10px;
+            padding:12px 14px; font-size:13.5px; line-height:1.6; white-space:pre-wrap; min-height:20px;
+            color:#1f2937; overflow-wrap:anywhere; }
+  .brief-btn { border:none; border-radius:10px; padding:10px 18px; font-weight:700; cursor:pointer;
+               background:linear-gradient(135deg,var(--brand),var(--brand2)); color:#fff; font-size:14px; }
+  .reset-link { margin-left:auto; background:#fee2e2; color:var(--warn); border:none; border-radius:10px;
+                padding:8px 14px; font-weight:600; cursor:pointer; font-size:13px; }
 </style>
 </head>
 <body>
 <header>
   <div>
     <div class="logo">瓯单通</div>
-    <div class="tag">温州中小企业 · 订单协同智能体</div>
+  </div>
+  <div class="tag">温州中小企业 · 订单协同智能体</div>
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('chat')">💬 微信沟通</button>
+    <button class="tab-btn" onclick="switchTab('platform')">📊 平台汇总</button>
   </div>
   <div class="mode" id="modeBadge">加载中…</div>
 </header>
 
-<div class="wrap">
-  <div class="left">
-    <div class="chips" id="chips"></div>
-    <div class="chat" id="chat"></div>
-    <div class="inputbar">
-      <textarea id="input" placeholder="粘贴业务群聊，或输入「万博那单到哪了」「出今日简报」…"></textarea>
-      <button class="send" onclick="send()">发送</button>
-      <button class="reset" onclick="resetLedger()">重置台账</button>
+<main>
+  <!-- ===== Tab1：微信沟通模拟 ===== -->
+  <section class="tab active" id="tab-chat">
+    <div class="wechat">
+      <div class="wx-head"><span class="dot"></span>瓯单通 · 订单协作群（演示）</div>
+      <div class="wx-note">本页还原微信沟通场景：左侧「客户」发来的消息，右侧「瓯单通」自动提取并写入台账（台账可在「📊 平台汇总」页查看）。</div>
+      <div class="wx-chat" id="wxChat"></div>
+      <div class="wx-actions" id="wxActions">
+        <span class="lbl">▸ 模拟客户发来以下消息（点击即发给瓯单通）：</span>
+      </div>
+      <div class="wx-input">
+        <textarea id="wxInput" placeholder="也可手动以「客户」身份输入消息，如：李经理，我们想订…"></textarea>
+        <button onclick="wxSendInput()">发送</button>
+      </div>
     </div>
-  </div>
 
-  <div class="right">
-    <div class="panel">
-      <h3>📦 订单台账 <small id="orderCount"></small></h3>
-      <div id="orderTable"></div>
+  </section>
+
+  <!-- ===== Tab2：平台汇总 / 查询 ===== -->
+  <section class="tab" id="tab-platform">
+    <div class="stats" id="stats"></div>
+    <div class="grid2">
+      <div class="panel">
+        <h3>📦 订单台账 <small id="pOrderCount"></small></h3>
+        <div id="pOrderTable"></div>
+      </div>
+      <div class="panel">
+        <h3>✅ 任务台账 <small id="pTaskCount"></small></h3>
+        <div id="pTaskTable"></div>
+      </div>
     </div>
     <div class="panel">
-      <h3>✅ 任务台账 <small id="taskCount"></small></h3>
-      <div id="taskTable"></div>
+      <h3>🔍 订单查询 <small>在平台汇总页查询在途 / 历史订单</small></h3>
+      <div class="query-box">
+        <input id="qInput" placeholder="如：万博那单到哪了？ / 温州机电那单 / 本周有哪些单" />
+        <button onclick="doQuery()">查询</button>
+        <span class="qchip" onclick="qExample('万博那单到哪了？')">查万博那单</span>
+        <span class="qchip" onclick="qExample('温州机电那单到哪了？')">查温州机电</span>
+        <span class="qchip" onclick="qExample('王工 NMX-60 到哪了？')">查王工 NMX-60</span>
+      </div>
+      <div class="result" id="qResult">在上方输入或点示例进行查询。</div>
     </div>
-  </div>
-</div>
+    <div class="panel">
+      <h3>📊 今日简报 <small>汇总今日新增 / 待跟进 / 临期</small></h3>
+      <button class="brief-btn" onclick="doBriefing()">📊 出今日简报</button>
+      <div class="result" id="briefResult">点击上方按钮生成今日简报。</div>
+      <button class="reset-link" onclick="resetAll()">重置台账</button>
+    </div>
+  </section>
+</main>
+
+<div id="errBanner" style="display:none;position:fixed;left:0;right:0;bottom:0;background:#dc2626;color:#fff;padding:10px 16px;font-size:13px;z-index:99;box-shadow:0 -2px 8px rgba(0,0,0,.2);"></div>
 
 <script>
-const EXAMPLES = [
-  { label:"🆕 新建订单", scenario:"new", text:"瑞安精工：轴承座 UC205 120个，12月1号交，单价5.5" },
-  { label:"✏️ 客户改数量", scenario:"update", text:"王工：NMX-60 那批数量改成 6000 个" },
-  { label:"🟡 信息缺失", scenario:"missing", text:"龙湾机械：齿轮箱再走一批（数量和交期都没说）" },
-  { label:"⚠️ 数据冲突", scenario:"conflict", text:"温州机电：法兰盘交期改 11-28（台账记的是 11-25）" },
-  { label:"⛔ 异常拦截", scenario:"abnormal", text:"温州机电：法兰盘数量 -50（多打了负号）" },
-  { label:"🔍 查万博那单", scenario:"query", text:"万博那单到哪了？" },
-  { label:"📊 出今日简报", scenario:"briefing", text:"出今日简报" },
+const CHAT_SCENARIOS = [
+  { label:"🆕 客户新建订单", scenario:"new",
+    text:"李经理，我们瑞安精工想订一批轴承座 UC205，120个，12月1号交，单价5.5你看行不？" },
+  { label:"✏️ 客户改数量", scenario:"update",
+    text:"王工：李经理，NMX-60 那批数量改一下，改成 6000 个" },
+  { label:"🟡 客户信息缺失", scenario:"missing",
+    text:"龙湾机械：齿轮箱再走一批（数量和交期都没说）" },
+  { label:"⚠️ 客户数据冲突", scenario:"conflict",
+    text:"温州机电：李经理，法兰盘交期改 11-28（台账记的是 11-25）" },
+  { label:"⛔ 客户异常拦截", scenario:"abnormal",
+    text:"温州机电：法兰盘数量 -50（多打了负号）" },
 ];
-let currentScenario = null;
+const SIM_NOTE = "⚠️ 模拟模式";
 
 function el(id){ return document.getElementById(id); }
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function stripNote(t){ const i=(t||"").indexOf("\n\n"+SIM_NOTE); return (i>=0?t.slice(0,i):t).trim(); }
+function modeCap(m){ return ({parse:"📦 提取入库", query:"🔍 订单查询", briefing:"📊 今日简报", hint:"💡 提示"})[m]||""; }
 
-function renderChips(){
-  const c = el("chips");
-  EXAMPLES.forEach(e=>{
-    const s = document.createElement("span");
-    s.className="chip"; s.textContent=e.label;
-    s.onclick=()=>{ el("input").value=e.text; currentScenario=e.scenario||null; send(); };
-    c.appendChild(s);
+/* 错误横幅：任何未捕获异常/网络失败都可见，避免静默空白 */
+function showErr(m){ const b=el("errBanner"); if(!b) return; b.style.display="block"; b.textContent="⚠️ "+m; }
+window.addEventListener("error", function(e){ showErr("页面脚本异常："+(e.message||(e.error&&e.error.message)||"未知错误")); });
+
+/* 统一接口封装：带错误处理，失败抛错由调用方决定提示方式 */
+async function apiGet(path){
+  const r = await fetch(path, {headers:{"Accept":"application/json"}});
+  if(!r.ok) throw new Error("HTTP "+r.status+" "+path);
+  return await r.json();
+}
+async function apiPost(path, body){
+  const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"},
+    body: body?JSON.stringify(body):"{}"});
+  if(!r.ok) throw new Error("HTTP "+r.status+" "+path);
+  return await r.json();
+}
+
+function switchTab(name){
+  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+  document.querySelectorAll(".tab-btn").forEach(b=>b.classList.remove("active"));
+  el("tab-"+name).classList.add("active");
+  Array.from(document.querySelectorAll(".tab-btn")).forEach(b=>{
+    if(b.textContent.includes(name==="chat"?"微信":"平台")) b.classList.add("active");
+  });
+  /* 每次进入平台页都重新拉取，保证数据最新、且能从初始加载失败中恢复 */
+  if(name==="platform") refreshPlatform();
+}
+
+/* ---------- 微信气泡 ---------- */
+function addWx(role, text, mode){
+  const wrap = document.createElement("div");
+  wrap.className = "row " + (role==="customer"?"customer":"agent");
+  const av = document.createElement("div");
+  av.className = "avatar " + (role==="customer"?"cust":"agent");
+  av.textContent = role==="customer"?"客":"瓯";
+  const col = document.createElement("div"); col.className = "col";
+  if(role==="agent"){
+    const cap = document.createElement("div"); cap.className="cap"; cap.textContent = modeCap(mode);
+    col.appendChild(cap);
+  }
+  const b = document.createElement("div"); b.className="bubble"; b.textContent = text;
+  col.appendChild(b);
+  wrap.appendChild(av); wrap.appendChild(col);
+  el("wxChat").appendChild(wrap);
+  el("wxChat").scrollTop = el("wxChat").scrollHeight;
+}
+
+async function wxSend(text, scenario){
+  if(!text) return;
+  addWx("customer", text);
+  try{
+    const data = await apiPost("/api/chat", {message:text, scenario: scenario||null});
+    addWx("agent", stripNote(data.reply||"（无回复）"), data.mode);
+    if(data.ledger) renderPlatform(data.ledger);
+  }catch(e){ showErr("发送失败："+e.message); addWx("agent","（网络异常，未能连接智能体）","hint"); }
+}
+function wxSendInput(){
+  const i = el("wxInput"); wxSend(i.value.trim()); i.value="";
+}
+async function wxSendScenario(s){ await wxSend(s.text, s.scenario); }
+
+/* ---------- 台账渲染 ---------- */
+function orderRows(orders){
+  return orders.map(o=>`<tr><td>${esc(o.order_id)}</td><td>${esc(o.customer)}</td>`+
+    `<td>${esc(o.product)}</td><td>${esc(o.qty)}</td><td>${esc(o.delivery_date||"—")}</td>`+
+    `<td><span class="badge b-${esc(o.status)}">${esc(o.status)}</span></td></tr>`).join("");
+}
+function taskRows(tasks){
+  return tasks.map(t=>`<tr><td>${esc(t.content)}</td><td>${esc(t.owner||"待认领")}</td>`+
+    `<td>${esc(t.deadline||"待定")}</td><td>${esc(t.status)}</td></tr>`).join("");
+}
+function renderPlatform(L){
+  if(!L || !L.orders){
+    el("pOrderTable").innerHTML = '<div class="empty">台账暂未加载（请确认服务已启动后刷新）。</div>';
+    el("pTaskTable").innerHTML = "";
+    return;
+  }
+  const orders=L.orders||[], tasks=L.tasks||[];
+  if(el("modeBadge")) el("modeBadge").textContent = L.mode||"";
+  el("pOrderCount").textContent = "（"+orders.length+" 笔）";
+  el("pTaskCount").textContent = "（"+tasks.length+" 项）";
+  el("pOrderTable").innerHTML = orders.length ? (
+    "<table><tr><th>单号</th><th>客户</th><th>产品</th><th>数量</th><th>交期</th><th>状态</th></tr>"+
+    orderRows(orders)+"</table>") : '<div class="empty">暂无订单。点「💬 微信沟通」模拟客户发消息试试。</div>';
+  el("pTaskTable").innerHTML = tasks.length ? (
+    "<table><tr><th>事项</th><th>责任人</th><th>期限</th><th>状态</th></tr>"+
+    taskRows(tasks)+"</table>") : '<div class="empty">暂无任务。</div>';
+  renderStats(L);
+}
+function renderStats(L){
+  const orders=L.orders||[], tasks=L.tasks||[];
+  const inProg = orders.filter(o=>!["已交付","已取消"].includes(o.status)).length;
+  const delivered = orders.filter(o=>o.status==="已交付").length;
+  const cancelled = orders.filter(o=>o.status==="已取消").length;
+  const data = [
+    {n:orders.length, t:"订单总数"}, {n:inProg, t:"在途"},
+    {n:delivered, t:"已交付"}, {n:cancelled, t:"已取消"}, {n:tasks.length, t:"任务总数"},
+  ];
+  el("stats").innerHTML = data.map(d=>`<div class="stat"><div class="n">${d.n}</div><div class="t">${d.t}</div></div>`).join("");
+}
+
+/* 进入平台页 / 初始化 / 重置后都会调用：拉取台账并渲染 */
+async function refreshPlatform(){
+  try{
+    const L = await apiGet("/api/ledger");
+    renderPlatform(L);
+  }catch(e){ showErr("加载台账失败："+e.message); }
+}
+
+/* ---------- 平台：查询 / 简报 / 重置 ---------- */
+async function doQuery(){
+  const t = el("qInput").value.trim(); if(!t) return;
+  try{
+    const data = await apiPost("/api/chat", {message:t});
+    el("qResult").textContent = stripNote(data.reply||"（无结果）");
+  }catch(e){ showErr("查询失败："+e.message); }
+}
+function qExample(t){ el("qInput").value=t; doQuery(); }
+async function doBriefing(){
+  try{
+    const data = await apiPost("/api/chat", {message:"出今日简报"});
+    el("briefResult").textContent = stripNote(data.reply||"（无结果）");
+  }catch(e){ showErr("生成简报失败："+e.message); }
+}
+async function resetAll(){
+  try{
+    await apiPost("/api/reset");
+    el("wxChat").innerHTML="";
+    el("qResult").textContent="在上方输入或点示例进行查询。";
+    el("briefResult").textContent="点击上方按钮生成今日简报。";
+    addWx("agent","台账已清空，可重新模拟客户发消息。","hint");
+    await refreshPlatform();
+  }catch(e){ showErr("重置失败："+e.message); }
+}
+
+/* ---------- 初始化 ---------- */
+function renderChatButtons(){
+  const box = el("wxActions");
+  CHAT_SCENARIOS.forEach(s=>{
+    const b=document.createElement("button"); b.className="cbtn"; b.textContent=s.label;
+    b.onclick=()=>wxSendScenario(s); box.appendChild(b);
   });
 }
-
-function addMsg(role, text, mode){
-  const d = document.createElement("div");
-  d.className = "msg " + (role==="user"?"user":"bot");
-  if(role==="bot" && mode){
-    const t=document.createElement("div"); t.className="mode-tag";
-    t.textContent = {parse:"📦 提取入库",query:"🔍 订单查询",briefing:"📊 今日简报",hint:"💡 提示"}[mode]||"";
-    d.appendChild(t);
-  }
-  d.appendChild(document.createTextNode(text));
-  el("chat").appendChild(d);
-  el("chat").scrollTop = el("chat").scrollHeight;
-}
-
-function esc(s){ return (s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
-
-function renderLedger(L){
-  const orders = L.orders||[], tasks = L.tasks||[];
-  el("modeBadge").textContent = L.mode;
-  el("orderCount").textContent = "（"+orders.length+" 笔）";
-  el("taskCount").textContent = "（"+tasks.length+" 项）";
-  el("orderTable").innerHTML = orders.length ? (
-    "<table><tr><th>单号</th><th>客户</th><th>产品</th><th>数量</th><th>交期</th><th>状态</th></tr>" +
-    orders.map(o=>`<tr><td>${esc(o.order_id)}</td><td>${esc(o.customer)}</td><td>${esc(o.product)}</td>`+
-      `<td>${esc(o.qty)}</td><td>${esc(o.delivery_date||"—")}</td>`+
-      `<td><span class="badge b-${esc(o.status)}">${esc(o.status)}</span></td></tr>`).join("") + "</table>"
-  ) : '<div class="empty">暂无订单，粘贴群聊试试。</div>';
-  el("taskTable").innerHTML = tasks.length ? (
-    "<table><tr><th>事项</th><th>责任人</th><th>期限</th><th>状态</th></tr>" +
-    tasks.map(t=>`<tr><td>${esc(t.content)}</td><td>${esc(t.owner||"待认领")}</td>`+
-      `<td>${esc(t.deadline||"待定")}</td><td>${esc(t.status)}</td></tr>`).join("") + "</table>"
-  ) : '<div class="empty">暂无任务。</div>';
-}
-
-async function send(){
-  const inp = el("input");
-  const text = inp.value.trim();
-  if(!text) return;
-  addMsg("user", text);
-  inp.value = "";
-  const r = await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({message:text, scenario: currentScenario})});
-  const data = await r.json();
-  addMsg("bot", data.reply||"（无回复）", data.mode);
-  if(data.ledger) renderLedger(data.ledger);
-  currentScenario = null;
-}
-
-async function resetLedger(){
-  await fetch("/api/reset",{method:"POST"});
-  el("chat").innerHTML="";
-  addMsg("bot","台账已清空，可重新粘贴群聊。","hint");
-  renderLedger(await (await fetch("/api/ledger")).json());
-}
-
 async function init(){
-  renderChips();
-  const L = await (await fetch("/api/ledger")).json();
-  renderLedger(L);
-  addMsg("bot","我是瓯单通，你的订单协同助手。点上方【示例】按钮，可一键体验：\n🆕 新建 ｜ ✏️ 变更 ｜ 🟡 缺失 ｜ ⚠️ 冲突 ｜ ⛔ 异常 ｜ 🔍 查单 ｜ 📊 简报","hint");
+  renderChatButtons();
+  await refreshPlatform();   /* 失败已在内部提示，不阻断欢迎语 */
+  addWx("agent","我是瓯单通，已接入本群。客户在微信里发的订单消息，我会自动提取成台账。\n点下方按钮，模拟客户发来 5 类消息 👇","hint");
 }
 init();
 </script>

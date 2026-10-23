@@ -81,6 +81,18 @@ def _now():
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
+def _fuzzy_eq(a: str, b: str) -> bool:
+    """简称包含式等价：互为子串即视为同一客户/产品（至少 2 字，防单字误命中）。"""
+    a, b = (a or "").strip(), (b or "").strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    short = a if len(a) <= len(b) else b
+    long = b if short is a else a
+    return len(short) >= 2 and short in long
+
+
 class Store:
     def __init__(self, data_dir: str = DATA_DIR):
         self.data_dir = data_dir
@@ -210,10 +222,20 @@ class Store:
         return next((t for t in self.tasks if t.get("task_id") == task_id), None)
 
     def find_active(self, customer: str, product: str):
+        # 1) 精确匹配（mock / 正式名称场景，行为与原版完全一致）
         for o in self.orders:
             if o.get("customer") == customer and o.get("product") == product \
                     and o.get("status") not in ("已交付",):
                 return o
+        # 2) 简称模糊匹配（真实模式口语常只说简称：
+        #    「王工」↔「王工（XX电气）」、「NMX-60」↔「NMX-60 断路器外壳」）
+        if customer and product:
+            for o in self.orders:
+                if o.get("status") in ("已交付",):
+                    continue
+                oc, op = (o.get("customer") or "").strip(), (o.get("product") or "").strip()
+                if _fuzzy_eq(oc, customer) and _fuzzy_eq(op, product):
+                    return o
         return None
 
     # ------------------------------------------------------------------

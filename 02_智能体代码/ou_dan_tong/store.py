@@ -118,6 +118,9 @@ def _fuzzy_eq(a: str, b: str) -> bool:
     if len(short) >= 2 and short in long:
         return True
     # 2) 共享 ≥4 字核心片段（覆盖口语包裹 / 语序颠倒）
+    # 快筛：两串无任何公共字符必然无公共子串，直接短路，省掉 O(n*m) DP
+    if not (set(a) & set(b)):
+        return False
     common = _longest_common_substring(a, b)
     if len(common) >= 4:
         return True
@@ -321,14 +324,40 @@ class Store:
                 "done": bool(total and delivered >= total),
                 "last_date": max(b["date"] for b in batches)}
 
+    def _batch_consistency_msgs(self, order: dict):
+        """D-2 批次一致性检查——integrity_check 与 repair 共用的唯一口径（防两处漂移）。
+
+        返回 (level, 消息) 列表；空列表 = 批次数据自洽。
+        """
+        raw = order.get("delivery_batches")
+        if not (isinstance(raw, list) and raw):
+            if raw not in (None, []):
+                return [("error", f"delivery_batches「{raw}」不是批次列表")]
+            return []
+        msgs = []
+        dq, rq = order.get("delivered_qty"), order.get("remain_qty")
+        q = order.get("qty")
+        batch_sum = sum(b["qty"] for b in self._valid_batches(order))
+        # 规则1：批次数量之和必须等于 delivered_qty
+        if dq is None:
+            msgs.append(("error", f"有 delivery_batches（合计 {batch_sum}）但缺 delivered_qty，批次总量无法核对"))
+        elif batch_sum != dq:
+            msgs.append(("error", f"批次数量之和 {batch_sum} ≠ delivered_qty {dq}"))
+        # 规则2：delivered_qty + remain_qty 必须等于 qty
+        if dq is not None and rq is not None \
+                and isinstance(q, int) and not isinstance(q, bool) and dq + rq != q:
+            msgs.append(("error", f"delivered_qty {dq} + remain_qty {rq} ≠ qty {q}"))
+        elif dq is not None and rq is None \
+                and isinstance(q, int) and not isinstance(q, bool):
+            msgs.append(("warn", "有 delivered_qty 但缺 remain_qty，无法核对 delivered+remain=qty"))
+        # 规则3：待补充占位单不应有批次（未确认的东西不可能有交期）
+        if order.get("status") == "待补充":
+            msgs.append(("error", "待补充占位单不应有 delivery_batches（信息未确认不可能定交期）"))
+        return msgs
+
     # ------------------------------------------------------------------
     # 模块三·2 最新状态解析（后值覆盖前值；冲突/异常不自动覆盖）
     # ------------------------------------------------------------------
-    @staticmethod
-    def _meaningful(v):
-        s = str(v).strip() if v is not None else ""
-        return s not in ("", "None", "待报价")
-
     def apply_latest(self, order_id: str, patch: dict, source: str = "",
                      speaker: str = "", time: str = None, force: bool = False,
                      record_each: bool = True):
@@ -556,33 +585,9 @@ class Store:
             dd = o.get("delivery_date")
             if dd and not (isinstance(dd, str) and len(dd) == 10 and dd[4] == dd[7] == "-"):
                 _issue("error", "order", oid, f"交期「{dd}」非 YYYY-MM-DD 格式")
-            # D-2 批次字段一致性（delivery_batches / delivered_qty / remain_qty）
-            raw_batches = o.get("delivery_batches")
-            if isinstance(raw_batches, list) and raw_batches:
-                dq = o.get("delivered_qty")
-                batch_sum = sum(b["qty"] for b in self._valid_batches(o))
-                # 规则1：批次数量之和必须等于 delivered_qty
-                if dq is None:
-                    _issue("error", "order", oid,
-                           f"有 delivery_batches（合计 {batch_sum}）但缺 delivered_qty，批次总量无法核对")
-                elif batch_sum != dq:
-                    _issue("error", "order", oid,
-                           f"批次数量之和 {batch_sum} ≠ delivered_qty {dq}")
-                # 规则2：delivered_qty + remain_qty 必须等于 qty
-                rq = o.get("remain_qty")
-                if dq is not None and rq is not None and isinstance(q, int):
-                    if dq + rq != q:
-                        _issue("error", "order", oid,
-                               f"delivered_qty {dq} + remain_qty {rq} ≠ qty {q}")
-                elif dq is not None and rq is None and isinstance(q, int):
-                    _issue("warn", "order", oid,
-                           "有 delivered_qty 但缺 remain_qty，无法核对 delivered+remain=qty")
-                # 规则3：待补充占位单不应有批次（未确认的东西不可能有交期）
-                if o.get("status") == "待补充":
-                    _issue("error", "order", oid,
-                           "待补充占位单不应有 delivery_batches（信息未确认不可能定交期）")
-            elif raw_batches not in (None, []):
-                _issue("error", "order", oid, f"delivery_batches「{raw_batches}」不是批次列表")
+            # D-2 批次字段一致性（与 repair 共用同一口径）
+            for level, msg in self._batch_consistency_msgs(o):
+                _issue(level, "order", oid, msg)
             if not o.get("created_at"):
                 _issue("warn", "order", oid, "缺 created_at")
             for c in o.get("change_log", []):
@@ -669,23 +674,12 @@ class Store:
                     set(flags.get("locked_fields") or []) | {"delivery_date"})
                 remaining.append(f"订单 {oid} 交期格式异常（{dd}），已锁定待人工确认")
             # D-2 批次字段不一致：只标记「需人工确认」，不得静默篡改批次/数量数据
-            raw_batches = o.get("delivery_batches")
-            if isinstance(raw_batches, list) and raw_batches:
-                dq, rq = o.get("delivered_qty"), o.get("remain_qty")
-                batch_sum = sum(b["qty"] for b in self._valid_batches(o))
-                msgs = []
-                if dq is None:
-                    msgs.append(f"有批次（合计 {batch_sum}）但缺 delivered_qty")
-                elif batch_sum != dq:
-                    msgs.append(f"批次和 {batch_sum} ≠ delivered_qty {dq}")
-                if dq is not None and rq is not None and isinstance(q, int) and dq + rq != q:
-                    msgs.append(f"delivered {dq} + remain {rq} ≠ qty {q}")
-                if o.get("status") == "待补充":
-                    msgs.append("待补充单不应带批次")
-                if msgs:
-                    msg = "；".join(msgs)
-                    flags["batch_inconsistent"] = f"{msg}，需人工确认（未自动修改）"
-                    remaining.append(f"订单 {oid} 批次数据不一致（{msg}），需人工确认")
+            # （口径与 integrity_check 共用 _batch_consistency_msgs，防两处漂移）
+            batch_msgs = self._batch_consistency_msgs(o)
+            if batch_msgs:
+                msg = "；".join(m for _, m in batch_msgs)
+                flags["batch_inconsistent"] = f"{msg}，需人工确认（未自动修改）"
+                remaining.append(f"订单 {oid} 批次数据不一致（{msg}），需人工确认")
 
         # 任务：重复号 / 孤儿引用 / 时间戳
         seen_t = set()

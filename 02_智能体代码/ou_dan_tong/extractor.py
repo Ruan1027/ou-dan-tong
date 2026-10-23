@@ -3,7 +3,7 @@ import datetime
 import json
 
 from llm import LLM
-from prompts import EXTRACTION_SYSTEM
+from prompts import EXTRACTION_SYSTEM, SENDER_RULE
 
 
 def _normalize(parsed):
@@ -23,14 +23,21 @@ def _normalize(parsed):
     return []
 
 
-def extract(chat_text: str, llm: LLM = None, mock=None):
+def extract(chat_text: str, llm: LLM = None, mock=None, sender: str = None):
     if mock is not None:
         return mock
     if llm is None:
         llm = LLM()
     # 注入当前日期：口语日期（「下个月15号」）依赖「今天」才能归一化，否则模型只能瞎猜
     today = datetime.date.today().isoformat()
-    raw = llm.chat(EXTRACTION_SYSTEM + f"\n当前日期：{today}", chat_text, json_mode=True)
+    sys_prompt = EXTRACTION_SYSTEM + f"\n当前日期：{today}"
+    user_msg = chat_text
+    # 注入发送者：真实微信群每条消息都带发言人昵称。缺了它，客户自报类消息
+    # （「小陈，DZ47 那个加到 80 个」）会因为正文无客户名而抽成 customer=null → 整条被丢弃
+    if sender:
+        sys_prompt += SENDER_RULE
+        user_msg = f"[发送者:{sender}] {chat_text}"
+    raw = llm.chat(sys_prompt, user_msg, json_mode=True)
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]

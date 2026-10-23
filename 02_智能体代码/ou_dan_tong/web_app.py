@@ -83,11 +83,11 @@ def _pick_mock(scenario, text):
     return SCENARIO1_MOCK
 
 
-def do_chat(text, scenario=None):
+def do_chat(text, scenario=None, sender=None):
     with _LOCK:
         mock = _pick_mock(scenario, text) if USE_MOCK else None
         try:
-            result = handle_message(text, _store, llm=_llm, mock=mock)
+            result = handle_message(text, _store, llm=_llm, mock=mock, sender=sender)
         except Exception as e:  # LLM 网关抖动等：返回友好提示，不让请求空响应
             result = {"mode": "error",
                       "reply": f"⚠️ 智能体处理暂时失败（{type(e).__name__}），请稍后重试。"}
@@ -134,7 +134,8 @@ class Handler(BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 payload = {}
             text = (payload.get("message") or "").strip()
-            self._json(do_chat(text, scenario=payload.get("scenario")))
+            self._json(do_chat(text, scenario=payload.get("scenario"),
+                               sender=payload.get("sender")))
         elif self.path == "/api/reset":
             with _LOCK:
                 _store.reset()

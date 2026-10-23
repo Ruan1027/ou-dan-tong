@@ -525,7 +525,9 @@ class Store:
         """扫描台账一致性问题，返回问题清单（不改动数据）。
 
         检查项：重复ID、必填字段缺失、状态非法、数量非法（负数/非整数）、
-        交期格式、任务孤儿引用、变更记录缺时间。
+        交期格式、任务孤儿引用、变更记录缺时间；
+        D-2 批次规则：①批次数量之和=delivered_qty ②delivered_qty+remain_qty=qty
+        ③待补充占位单不得带 delivery_batches。
         """
         issues = []
 
@@ -554,6 +556,33 @@ class Store:
             dd = o.get("delivery_date")
             if dd and not (isinstance(dd, str) and len(dd) == 10 and dd[4] == dd[7] == "-"):
                 _issue("error", "order", oid, f"交期「{dd}」非 YYYY-MM-DD 格式")
+            # D-2 批次字段一致性（delivery_batches / delivered_qty / remain_qty）
+            raw_batches = o.get("delivery_batches")
+            if isinstance(raw_batches, list) and raw_batches:
+                dq = o.get("delivered_qty")
+                batch_sum = sum(b["qty"] for b in self._valid_batches(o))
+                # 规则1：批次数量之和必须等于 delivered_qty
+                if dq is None:
+                    _issue("error", "order", oid,
+                           f"有 delivery_batches（合计 {batch_sum}）但缺 delivered_qty，批次总量无法核对")
+                elif batch_sum != dq:
+                    _issue("error", "order", oid,
+                           f"批次数量之和 {batch_sum} ≠ delivered_qty {dq}")
+                # 规则2：delivered_qty + remain_qty 必须等于 qty
+                rq = o.get("remain_qty")
+                if dq is not None and rq is not None and isinstance(q, int):
+                    if dq + rq != q:
+                        _issue("error", "order", oid,
+                               f"delivered_qty {dq} + remain_qty {rq} ≠ qty {q}")
+                elif dq is not None and rq is None and isinstance(q, int):
+                    _issue("warn", "order", oid,
+                           "有 delivered_qty 但缺 remain_qty，无法核对 delivered+remain=qty")
+                # 规则3：待补充占位单不应有批次（未确认的东西不可能有交期）
+                if o.get("status") == "待补充":
+                    _issue("error", "order", oid,
+                           "待补充占位单不应有 delivery_batches（信息未确认不可能定交期）")
+            elif raw_batches not in (None, []):
+                _issue("error", "order", oid, f"delivery_batches「{raw_batches}」不是批次列表")
             if not o.get("created_at"):
                 _issue("warn", "order", oid, "缺 created_at")
             for c in o.get("change_log", []):
@@ -580,7 +609,9 @@ class Store:
 
         自动修复：重复ID重新编号、非法状态归一化（别名映射，仍非法→沟通中并标记）、
         缺 created_at/updated_at 补当前时间、任务孤儿引用清除、变更记录补时间。
-        不自动改值：负数/非整数数量、非法交期 → 标记 flags 待人工确认（不覆盖原值）。
+        不自动改值：负数/非整数数量、非法交期 → 标记 flags 待人工确认（不覆盖原值）；
+        D-2 批次不一致（批次和≠delivered_qty / delivered+remain≠qty / 占位单带批次）
+        → 仅打 flags.batch_inconsistent 标记进 remaining，绝不静默篡改批次数据。
         """
         actions, remaining = [], []
 
@@ -637,6 +668,24 @@ class Store:
                 flags["locked_fields"] = sorted(
                     set(flags.get("locked_fields") or []) | {"delivery_date"})
                 remaining.append(f"订单 {oid} 交期格式异常（{dd}），已锁定待人工确认")
+            # D-2 批次字段不一致：只标记「需人工确认」，不得静默篡改批次/数量数据
+            raw_batches = o.get("delivery_batches")
+            if isinstance(raw_batches, list) and raw_batches:
+                dq, rq = o.get("delivered_qty"), o.get("remain_qty")
+                batch_sum = sum(b["qty"] for b in self._valid_batches(o))
+                msgs = []
+                if dq is None:
+                    msgs.append(f"有批次（合计 {batch_sum}）但缺 delivered_qty")
+                elif batch_sum != dq:
+                    msgs.append(f"批次和 {batch_sum} ≠ delivered_qty {dq}")
+                if dq is not None and rq is not None and isinstance(q, int) and dq + rq != q:
+                    msgs.append(f"delivered {dq} + remain {rq} ≠ qty {q}")
+                if o.get("status") == "待补充":
+                    msgs.append("待补充单不应带批次")
+                if msgs:
+                    msg = "；".join(msgs)
+                    flags["batch_inconsistent"] = f"{msg}，需人工确认（未自动修改）"
+                    remaining.append(f"订单 {oid} 批次数据不一致（{msg}），需人工确认")
 
         # 任务：重复号 / 孤儿引用 / 时间戳
         seen_t = set()

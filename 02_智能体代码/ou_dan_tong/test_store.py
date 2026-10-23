@@ -226,6 +226,47 @@ def test_batch_delivery():
         shutil.rmtree(d, ignore_errors=True)
 
 
+# —— D-2 一致性校验覆盖批次字段 ——
+def test_integrity_batches():
+    s, d = _tmp_store()
+    try:
+        s.orders = [
+            # 类型1：批次和 900 ≠ delivered_qty 500
+            {**_order(qty=900), "order_id": "ORD-X1", "status": "生产中",
+             "delivered_qty": 500, "remain_qty": 400,
+             "delivery_batches": [{"qty": 400, "date": "2026-11-01"},
+                                  {"qty": 500, "date": "2026-11-03"}]},
+            # 类型2：delivered 500 + remain 100 ≠ qty 900
+            {**_order(qty=900), "order_id": "ORD-X2", "status": "生产中",
+             "delivered_qty": 500, "remain_qty": 100,
+             "delivery_batches": [{"qty": 500, "date": "2026-11-01"}]},
+            # 类型3：待补充占位单带了 delivery_batches
+            {**_order(), "order_id": "ORD-X3", "status": "待补充",
+             "delivery_batches": [{"qty": 10, "date": "2026-11-01"}]},
+        ]
+        issues = s.integrity_check()
+        by_id = {}
+        for i in issues:
+            by_id.setdefault(i["id"], []).append(i["issue"])
+        assert any("≠ delivered_qty" in m for m in by_id.get("ORD-X1", [])), by_id
+        assert any("remain_qty" in m and "≠" in m for m in by_id.get("ORD-X2", [])), by_id
+        assert any("待补充" in m for m in by_id.get("ORD-X3", [])), by_id
+        # 定位粒度：三类问题都带具体 order_id（by_id 键即单号）
+
+        # repair：给出明确标记「需人工确认」，不得静默篡改数据
+        actions, remaining = s.repair()
+        assert all(o.get("delivery_batches") for o in s.orders), "repair 不得删除批次数据"
+        assert s.orders[0]["delivered_qty"] == 500, "repair 不得改 delivered_qty"
+        assert s.orders[1]["remain_qty"] == 100, "repair 不得改 remain_qty"
+        assert s.orders[2]["status"] == "待补充", "repair 不得改占位单状态"
+        assert all(o["flags"].get("batch_inconsistent") for o in s.orders), "应打 batch_inconsistent 标记"
+        batch_remaining = [r for r in remaining if "批次" in r]
+        assert len(batch_remaining) == 3 and all("人工确认" in r for r in batch_remaining), remaining
+        print("✓ D-2 一致性校验覆盖批次字段：3 类坏数据检出并定位到单号，repair 只标记不篡改")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_model()
     test_latest_state()
@@ -233,5 +274,6 @@ if __name__ == "__main__":
     test_integrity()
     test_state_machine()
     test_batch_delivery()
+    test_integrity_batches()
     print("-" * 46)
     print("模块三 ALL TESTS PASSED ✅")

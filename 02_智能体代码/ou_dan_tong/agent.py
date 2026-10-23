@@ -497,6 +497,19 @@ def colloquialize(raw_text: str, force: bool = False, llm: LLM = None) -> str:
     return _colloquialize(raw_text, llm=llm, force=True)
 
 
+def _safe_llm():
+    """C-1：force 通道专用——调用方没注入 llm 时自建一个，构造失败也不抛。
+
+    背景：`handle_message(..., force_colloquial=True)` 在无 Key 场景下 llm 为 None，
+    `_colloquialize` 第一行就原样返回，与 `colloquialize()` 自建 LLM 的行为不一致，
+    演示时按「口语化 开」等于没反应。这里统一成「先尝试、失败由 _colloquialize 回退」。
+    """
+    try:
+        return LLM()
+    except Exception:
+        return None
+
+
 # ---- 意图路由：自动判断用户这句话要干啥 ----
 _QUERY_MARKERS = ("到哪", "状态", "查", "进度", "什么时候交", "几号交",
                  "待报价", "临期", "逾期", "交付", "什么状态", "有几",
@@ -541,14 +554,26 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str =
         return {"mode": "hint",
                 "reply": "把业务群聊粘贴给我，或问我「XX 那单到哪了」「出今日简报」。"}
     if any(k in t for k in _BRIEFING_MARKERS):
-        return {"mode": "briefing",
-                "reply": _colloquialize(briefing(store, llm), llm, force=force_colloquial)}
+        if force_colloquial and llm is None:
+            llm = _safe_llm()          # C-1：无 Key 也要尝试改写，失败由 _colloquialize 回退
+        ans = briefing(store, llm)
+        reply = _colloquialize(ans, llm, force=force_colloquial)
+        out = {"mode": "briefing", "reply": reply}
+        if force_colloquial and reply is ans:
+            out["colloquial_fallback"] = True   # 供前端提示「口语化未生效」
+        return out
     # 订单/改单意图优先：含变更动词或数量/价格数值主张时，即使带「那单」也按群聊解析
     if _looks_like_order(t):
         card, _ = parse_chat(t, store, llm=llm, mock=mock, sender=sender)
         return {"mode": "parse", "reply": card}
     if any(k in t for k in _QUERY_MARKERS):
-        return {"mode": "query",
-                "reply": _colloquialize(query(t, store, llm), llm, force=force_colloquial)}
+        if force_colloquial and llm is None:
+            llm = _safe_llm()          # C-1：无 Key 也要尝试改写，失败由 _colloquialize 回退
+        ans = query(t, store, llm)
+        reply = _colloquialize(ans, llm, force=force_colloquial)
+        out = {"mode": "query", "reply": reply}
+        if force_colloquial and reply is ans:
+            out["colloquial_fallback"] = True   # 无 Key / 事实失真 / 异常时都会走这里
+        return out
     card, _ = parse_chat(t, store, llm=llm, mock=mock, sender=sender)
     return {"mode": "parse", "reply": card}

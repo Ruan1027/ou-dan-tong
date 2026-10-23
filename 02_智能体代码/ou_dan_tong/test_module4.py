@@ -1,7 +1,7 @@
 """模块四 查询应答自测：查询解析/高亮/历史追溯/简报999修复/LLM口语化（无需 Key 可跑）。
 
 归属：队友C（模块四 查询应答）。
-运行：python test_module4.py          → 全量 golden（48 场景，改动 query/口语化/prompt 后必跑）
+运行：python test_module4.py          → 全量 golden（56 场景，改动 query/口语化/prompt 后必跑）
       python test_module4.py --smoke  → 快速回归集（秒级，开发期每次改动先跑）
 注：test_pipeline.py 归队友B（模块五），本文件独立，避免文件冲突。
 三层约定见 collect_failures.md（golden / smoke / 失败样本收集）。
@@ -438,6 +438,39 @@ def test_module4():
     finally:
         _agent_mod._COLLOQUIAL_ON = _prev_switch
 
+    # ---- C-1 审查修复：无 Key 时 force 通道不再静默失效 ----
+    # 场景56：llm=None + 未配 Key（用假 LLM 构造模拟「无 Key」）+ force=True
+    #   → 不抛错；仍回退模板原文；返回带 colloquial_fallback 标记（供前端提示「未生效」）
+    import agent as _am
+
+    class _NoKeyLLM:
+        """模拟「未配 Key」：构造能过、chat 必抛（真实 LLM 无 Key 时就是这个行为）。"""
+        def __init__(self):
+            pass
+
+        def chat(self, system, user, json_mode=False):
+            raise RuntimeError("未检测到 API Key。")
+
+    store.reset()
+    parse_chat("dummy", store, mock=[{
+        "type": "order", "customer": "温州机电", "product": "法兰盘",
+        "qty": 300, "unit_price": "1.8", "delivery_date": "2026-12-01",
+        "sample_flag": "大货", "source_excerpt": "法兰盘 300 个"}])
+    _tpl56 = query("法兰盘 到哪了", store)
+    _sw56, _llm56 = _agent_mod._COLLOQUIAL_ON, _am.LLM
+    _agent_mod._COLLOQUIAL_ON = False
+    _am.LLM = _NoKeyLLM
+    try:
+        r56 = handle_message("法兰盘 到哪了", store, llm=None, force_colloquial=True)
+        assert r56["reply"] == _tpl56, f"C-1: 无 Key 时应回退原文: {r56['reply']!r}"
+        assert r56.get("colloquial_fallback") is True, \
+            f"C-1: 无 Key 且 force=True 必须回传 colloquial_fallback 标记: {r56}"
+        r56_b = handle_message("法兰盘 到哪了", store, llm=None, force_colloquial=False)
+        assert "colloquial_fallback" not in r56_b, "C-1: 未开 force 不应带回退标记"
+    finally:
+        _agent_mod._COLLOQUIAL_ON = _sw56
+        _am.LLM = _llm56
+
     print("ALL TESTS PASSED ✅")
     print("-" * 40)
     print(b)
@@ -446,7 +479,7 @@ def test_module4():
 def smoke():
     """P0-4 快速回归集（python test_module4.py --smoke）：守关键链路，秒级跑完。
 
-    与 golden（全量 43 场景）不同，smoke 只覆盖最容易回归的核心路径，
+    与 golden（全量 56 场景）不同，smoke 只覆盖最容易回归的核心路径，
     改动 query()/_colloquialize()/prompt 或卡片后，先跑这个再跑全量。
     """
     import time
@@ -570,14 +603,31 @@ def smoke():
     finally:
         _agent_mod._COLLOQUIAL_ON = _sw
 
-    print(f"SMOKE TESTS PASSED ✅（{time.time() - t0:.2f}s，14 个检查点）")
+    # ⑭ C-1 审查修复：无 Key + force=True 不静默（必须带回退标记，前端才提示得出来）
+    class _NoKeyLLM2:
+        def __init__(self):
+            pass
+
+        def chat(self, system, user, json_mode=False):
+            raise RuntimeError("未检测到 API Key。")
+
+    from agent import handle_message as _hm
+    _llm_bak, _agent_mod.LLM = _agent_mod.LLM, _NoKeyLLM2
+    try:
+        _r14 = _hm("法兰盘 到哪了", store, llm=None, force_colloquial=True)
+        assert _r14.get("colloquial_fallback") is True, \
+            f"C-1: 无 Key 时必须回传 colloquial_fallback: {_r14}"
+    finally:
+        _agent_mod.LLM = _llm_bak
+
+    print(f"SMOKE TESTS PASSED ✅（{time.time() - t0:.2f}s，15 个检查点）")
 
 
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(
         description="模块四查询应答自测（三层：golden 全量 / smoke 快速 / failures 收集）")
-    ap.add_argument("--smoke", action="store_true", help="只跑快速回归集（秒级），默认跑全量 48 场景")
+    ap.add_argument("--smoke", action="store_true", help="只跑快速回归集（秒级），默认跑全量 56 场景")
     args = ap.parse_args()
     if args.smoke:
         smoke()

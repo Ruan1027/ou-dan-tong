@@ -72,6 +72,22 @@ extract("小陈，DZ47 那个加到 80 个", cap2, sender=None)
 ok(cap2.calls[0]["user"] == "小陈，DZ47 那个加到 80 个", "T2 无 sender 时原文直传", cap2.calls[0]["user"][:40])
 ok(SENDER_RULE.strip() not in cap2.calls[0]["system"], "T2 无 sender 时不追加 SENDER_RULE")
 
+# ---------------- T2b 发信人即客户：强制覆盖 LLM 抽错的客户 ----------------
+# 只补「customer 为空」是不够的：真实模型常把消息里 @ 的我方业务员（「小陈」）
+# 当成客户抽出来，customer 非空 → 补空值不触发 → 下游照样判「缺少客户信息」。
+print("\nT2b 发信人即客户（LLM 抽错也必须纠正）")
+for tag, payload, want in [
+    ("LLM 抽成业务员「小陈」", '[{"type":"order","customer":"小陈","product":"DZ47"}]', "王总"),
+    ("LLM 返回 null",          '[{"type":"order","customer":null,"product":"法兰"}]', "王总"),
+    ("LLM 抽成公司名",          '[{"type":"order","customer":"永嘉精密机械","product":"法兰"}]', "王总（永嘉精密机械）"),
+    ("LLM 已带发信人",          '[{"type":"order","customer":"王总（永嘉精密机械）","product":"法兰"}]', "王总（永嘉精密机械）"),
+]:
+    got = extract("x", _CaptureLLM(payload), sender="王总")[0]["customer"]
+    ok(got == want, f"T2b {tag} → {want}", got)
+
+got_nosender = extract("x", _CaptureLLM('[{"type":"order","customer":"小陈","product":"DZ47"}]'))[0]["customer"]
+ok(got_nosender == "小陈", "T2b 无 sender 时不改写 LLM 结果", got_nosender)
+
 # ---------------- T3 sender 透传到 parse_chat ----------------
 print("\nT3 sender 从 parse_chat 透传到 extract")
 cap3 = _CaptureLLM()
@@ -91,6 +107,23 @@ ok(meta["skipped"] == 0, "T4 不再产生 skipped", meta["skipped"])
 ok(len(meta["orders"]) == 1, "T4 成功录入/更新 1 单", len(meta["orders"]))
 ok("信息不全" not in card, "T4 卡片不再是「信息不全已跳过」", card[:60])
 
+# ---------------- T4b 意图路由的三个分支都要透传 sender ----------------
+# 「小陈，法兰那批再帮我排上一批」既不含变更动词也不含数量，会落到
+# handle_message 最后的兜底 parse_chat。该分支曾漏传 sender，导致发信人丢失、
+# 被判「缺少客户信息」—— 这是线上实际复现过的故障，必须锁死。
+print("\nT4b 意图路由各分支均透传 sender")
+for tag, msg in [
+    ("含变更动词分支", "小陈，DZ47 那个加到 80 个"),
+    ("兜底分支（无动词无数值）", "小陈，法兰那批再帮我排上一批"),
+]:
+    cap_b = _CaptureLLM()
+    s_b = Store(); s_b.reset()
+    handle_message("__seed__", s_b, llm=None, mock=WEB_DEMO_SEED)
+    handle_message(msg, s_b, llm=cap_b, sender="王总")
+    ok(bool(cap_b.calls) and cap_b.calls[0]["user"].startswith("[发送者:王总] "),
+       f"T4b {tag} 透传 sender",
+       cap_b.calls[0]["user"][:30] if cap_b.calls else "未调用 LLM")
+
 # ---------------- T5 前端 5 个按钮都带 sender ----------------
 print("\nT5 网页快捷按钮均携带 sender")
 html = open(os.path.join(ROOT, "static", "index.html"), encoding="utf-8").read()
@@ -98,9 +131,10 @@ block = re.search(r"const CHAT_SCENARIOS\s*=\s*\[(.*?)\n\];", html, re.S)
 ok(block is not None, "T5 找到 CHAT_SCENARIOS 定义")
 if block:
     items = re.findall(r"scenario:\"(\w+)\"[^}]*?sender:\"([^\"]+)\"", block.group(1))
-    ok(len(items) == 5, "T5 5 个按钮都声明了 sender", len(items))
+    ok(len(items) == 6, "T5 6 个按钮都声明了 sender", len(items))
     names = {k: v for k, v in items}
-    expect = {"new": "阿珍", "update": "李姐", "missing": "王总", "conflict": "王总", "abnormal": "李姐"}
+    expect = {"new": "阿珍", "update": "李姐", "append": "王总",
+              "missing": "王总", "conflict": "王总", "abnormal": "李姐"}
     for k, v in expect.items():
         ok(names.get(k) == v, f"T5 {k} 的 sender = {v}", names.get(k))
     ok("sender: sender||null" in html, "T5 发送请求体带上 sender 字段")

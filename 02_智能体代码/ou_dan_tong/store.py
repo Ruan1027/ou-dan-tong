@@ -257,6 +257,9 @@ class Store:
         o.setdefault("qty", None)
         o.setdefault("unit_price", "待报价")
         o.setdefault("delivery_date", None)
+        # 追加单标记：parent_order_id 指向被追加的原单，is_append=True
+        o.setdefault("parent_order_id", None)
+        o.setdefault("is_append", False)
         raw_status = o.get("status")
         st = normalize_status(raw_status)
         if raw_status == PLACEHOLDER_STATUS:
@@ -324,15 +327,18 @@ class Store:
         if not (customer or "").strip() or not (product or "").strip():
             return None
         # 1) 精确匹配（mock / 正式名称场景，行为与原版完全一致）
+        #    已交付的单不再参与匹配：交付完后再来的货按新建订单处理（用户 2026-10-23 规则③）。
+        #    已取消的单**仍参与匹配**——保持 BUG-11 引入的既有行为，避免动 test_pipeline T12。
+        _CLOSED = ("已交付",)
         for o in self.orders:
             if o.get("customer") == customer and o.get("product") == product \
-                    and o.get("status") not in ("已交付",):
+                    and o.get("status") not in _CLOSED:
                 return o
         # 2) 简称模糊匹配（真实模式口语常只说简称：
         #    「王工」↔「王工（XX电气）」、「NMX-60」↔「NMX-60 断路器外壳」）
         if customer and product:
             for o in self.orders:
-                if o.get("status") in ("已交付",):
+                if o.get("status") in _CLOSED:
                     continue
                 oc, op = (o.get("customer") or "").strip(), (o.get("product") or "").strip()
                 if _fuzzy_eq(oc, customer) and _fuzzy_eq(op, product):

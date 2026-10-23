@@ -11,7 +11,8 @@
 import re
 import datetime
 
-from contracts import CheckStatus, ValidationResult, CHANGE_VERBS
+from contracts import (CheckStatus, ValidationResult, CHANGE_VERBS, VAGUE_QTY_WORDS,
+                       effective_delivery_date)
 from prompts import STATUS_RANK
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -31,6 +32,46 @@ def _to_int(v):
 def _meaningful(v):
     s = str(v).strip() if v is not None else ""
     return s != "" and s != "待报价"
+
+
+def _vague_qty_word(o: dict, raw_text: str = None):
+    """检测原文里是否用了模糊量词（「一批」「若干」…）。
+
+    模糊量词不等于具体件数：不能猜成 1，必须按「数量缺失」交人工确认。
+    返回命中的那个词（用于话术回显），没命中返回 None。
+    """
+    text = (o.get("source_excerpt") or "") + " " + (raw_text or "")
+    for w in VAGUE_QTY_WORDS:
+        if w in text:
+            return w
+    return None
+
+
+def _missing_message(o: dict, raw_text: str = None, existing: dict = None):
+    """生成「缺失信息」话术：逐项列清缺什么，不留「缺客户或产品」这种模糊话。
+
+    规则（用户 2026-10-23 明确）：
+    - 模糊量词（「一批」）按数量缺失处理，并点明是模糊量词；
+    - 数量/交期一旦判缺，单价一并列入待确认（一次问清，避免反复往返）；
+    - 命中在途单时，额外提示「疑似追加」，让用户知道这是往原单上补。
+    返回 (message, None) 表示确实缺；返回 (None, None) 表示不缺。
+    """
+    miss = []
+    vague = _vague_qty_word(o, raw_text)
+    if not _meaningful(o.get("qty")):
+        miss.append(f"数量（原文「{vague}」为模糊量词，需明确件数）" if vague else "数量")
+    if not _meaningful(effective_delivery_date(o)):
+        miss.append("交期")
+    if not miss:
+        return None
+    # 已判缺失 → 单价一并纳入待确认
+    if not _meaningful(o.get("unit_price")):
+        miss.append("单价")
+    msg = "信息不全，已登记占位待补：" + "、".join(miss) + "缺失，请补充后我再正式建单。"
+    if existing is not None:
+        msg += (f"（疑似对 {existing['order_id']}「{existing['customer']}｜{existing['product']}」的追加，"
+                "数量确认后我再挂到原单下）")
+    return msg
 
 
 def _parse_date(s):
@@ -75,6 +116,9 @@ def validate_extraction(raw):
                 "status": item.get("status_hint") or "沟通中",
                 "sample_flag": item.get("sample_flag") or "无",
                 "source_excerpt": (item.get("source_excerpt") or "").strip()[:100],
+                # intent 必须透传：追加/更新/新建的分流决策全靠它（用户 2026-10-23 规则③）。
+                # 早前这里漏掉该字段，导致每笔追加都被当成「更新」覆盖原单数量。
+                "intent": (item.get("intent") or "").strip().lower() or None,
             })
         elif t == "task":
             content = (item.get("task_content") or "").strip()
@@ -99,6 +143,11 @@ def apply_change(existing: dict, extracted: dict, now: str = None):
     """返回 (patch, change|None)。仅覆盖本次有值字段，并记录变更履历。"""
     now = now or datetime.datetime.now().isoformat(timespec="seconds")
     patch, changes = {}, []
+    # 交期比对口径统一（契约 effective_delivery_date）：分批单 delivery_date 常为 null，
+    # 不归一就会把「同一交期」误记成一次变更（履历里凭空多一条 无 → 2026-11-03）。
+    # TODO(产品决策)：分批单若收到单一新交期，应视为「替换计划、清空批次」还是「追加一批」，
+    #   当前未定，故这里只做只读归一，不改写 delivery_batches。
+    existing = {**existing, "delivery_date": effective_delivery_date(existing)}
     for field in ["spec", "qty", "unit_price", "delivery_date", "sample_flag"]:
         new = extracted.get(field)
         if _meaningful(new) and str(new) != str(existing.get(field)):
@@ -214,9 +263,13 @@ def classify_order(o: dict, existing: dict = None, order_date: str = None,
     if existing and existing.get("status") != "待补充":
         verb = _has_change_verb(_verb_text)
         contradictions = []
+        # 交期口径统一（契约 effective_delivery_date）：分批单的 delivery_date 常为 null，
+        # 直接比裸字段会让「交期冲突」静默漏检，也会把同一单误判成没变更。
+        _cmp_existing = {**existing, "delivery_date": effective_delivery_date(existing)}
+        _cmp_new = {**o, "delivery_date": effective_delivery_date(o)}
         for f in ("qty", "unit_price", "delivery_date"):
-            ev = existing.get(f)
-            nv = o.get(f)
+            ev = _cmp_existing.get(f)
+            nv = _cmp_new.get(f)
             if _meaningful(ev) and _meaningful(nv) and str(ev) != str(nv) and not verb:
                 contradictions.append(f"{_FIELD_CN.get(f, f)}：台账 {ev} ↔ 来单 {nv}")
         if contradictions:
@@ -229,28 +282,18 @@ def classify_order(o: dict, existing: dict = None, order_date: str = None,
 
     # 3. 缺失信息：仅当【新建订单】(无在途单) 才算缺失；更新场景缺字段只表示"该项不变更"。
     if existing is None:
-        miss = []
-        if not _meaningful(o.get("qty")):
-            miss.append("数量")
-        if not _meaningful(o.get("delivery_date")):
-            miss.append("交期")
-        if miss:
-            return ValidationResult(
-                CheckStatus.MISSING,
-                message="信息不全，已登记占位待补：" + "、".join(miss) + "缺失，请补充后我再正式建单。",
-                patch=None,
-            )
+        msg = _missing_message(o, raw_text)
+        if msg:
+            return ValidationResult(CheckStatus.MISSING, message=msg, patch=None)
 
     # 3.5 BUG-01' 修复：命中既有实体但数量/交期全空且无变更意图
     # → 视为补充确认追问，而非「无变化」（避免"已更新"误导）。
     if existing is not None:
         verb = _has_change_verb(_verb_text)
         if not verb and not _meaningful(o.get("qty")) and not _meaningful(o.get("delivery_date")):
-            return ValidationResult(
-                CheckStatus.MISSING,
-                message="这单已存在，但数量和交期还缺着——确认下数量/交期，我再正式补登？",
-                patch=None,
-            )
+            msg = _missing_message(o, raw_text, existing=existing) or \
+                "这单已存在，但数量和交期还缺着——确认下数量/交期，我再正式补登？"
+            return ValidationResult(CheckStatus.MISSING, message=msg, patch=None)
 
     # 4. 正常：可写入。patch 取本次有意义的新值（缺字段视为"不变更"，不报错）。
     patch = {f: o[f] for f in ("spec", "qty", "unit_price", "delivery_date", "sample_flag", "status")

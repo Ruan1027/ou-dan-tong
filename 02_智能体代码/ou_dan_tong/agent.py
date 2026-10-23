@@ -452,18 +452,19 @@ def _check_facts(raw: str, rewritten: str) -> bool:
     return True
 
 
-def _colloquialize(raw_text: str, llm: LLM = None) -> str:
+def _colloquialize(raw_text: str, llm: LLM = None, force: bool = False) -> str:
     """模块四·3：把机器化的查询/简报输出改写成口语播报体（**默认关闭**）。
 
     默认走模板直出，原因（实测数据支撑）：
     - 模板本身已经是人话（card_text / query_text / briefing_text），再经一次 LLM 改写
       会多花 8~9 秒，且会把「未命中具体客户/产品/状态」这类固定话术换掉，
       破坏「问题—答案一一对应」，评审追问时对不上模块二。
-    - 需要展示口语化能力时设 OU_COLLOQUIAL=1 开启。
+    - 需要展示口语化能力时设 OU_COLLOQUIAL=1 开启，或调用 colloquialize(..., force=True)。
 
+    force=True：无视总开关强制执行（供演示按钮/显式入口使用，C-1）。
     开启后仍有防幻觉：改写结果做事实保全校验（数字/日期/状态不得增删），失真则回退原文。
     """
-    if llm is None or not _COLLOQUIAL_ON:
+    if llm is None or (not _COLLOQUIAL_ON and not force):
         return raw_text
     if not raw_text or not raw_text.strip():
         return raw_text
@@ -478,6 +479,22 @@ def _colloquialize(raw_text: str, llm: LLM = None) -> str:
         return result
     except Exception:
         return raw_text
+
+
+def colloquialize(raw_text: str, force: bool = False, llm: LLM = None) -> str:
+    """显式口语化入口（C-1）：给演示/前端一个可对比「开 / 关」的调用点。
+
+    - force=False：受 OU_COLLOQUIAL 总开关约束，默认原样返回，**不产生任何 LLM 调用**；
+    - force=True：无视总开关强制执行；未注入 llm 时自行构造 LLM()；
+    - 事实失真 / LLM 异常 / 未配 Key 一律回退原文，本函数**不会抛错**（演示不能被打断）。
+    """
+    if not force and not _COLLOQUIAL_ON:
+        return raw_text
+    if not raw_text or not raw_text.strip():
+        return raw_text
+    if llm is None:
+        llm = LLM()  # 未配 Key 时 chat() 会抛错，由 _colloquialize 兜住并回退原文
+    return _colloquialize(raw_text, llm=llm, force=True)
 
 
 # ---- 意图路由：自动判断用户这句话要干啥 ----
@@ -510,10 +527,13 @@ def _looks_like_order(t: str) -> bool:
     return False
 
 
-def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str = None):
+def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str = None,
+                   force_colloquial: bool = False):
     """统一入口：贴群聊→提取；问句→查单；简报词→汇总。
     sender：发这条消息的客户方称谓（真实微信群的发言人昵称），缺了它客户自报类
             消息会被抽成「无客户」而丢弃，故网页端必须一并传入。
+    force_colloquial：C-1 显式演示开关，True 时无视 OU_COLLOQUIAL 强制执行口语化改写
+            （前端「口语化 开/关」按钮透传这个参数即可，默认模板直出）。
     模块四·3：query/briefing 的输出经 _colloquialize() 口语化（需显式开启，默认模板直出）。
     """
     t = (text or "").strip()
@@ -521,12 +541,14 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str =
         return {"mode": "hint",
                 "reply": "把业务群聊粘贴给我，或问我「XX 那单到哪了」「出今日简报」。"}
     if any(k in t for k in _BRIEFING_MARKERS):
-        return {"mode": "briefing", "reply": _colloquialize(briefing(store, llm), llm)}
+        return {"mode": "briefing",
+                "reply": _colloquialize(briefing(store, llm), llm, force=force_colloquial)}
     # 订单/改单意图优先：含变更动词或数量/价格数值主张时，即使带「那单」也按群聊解析
     if _looks_like_order(t):
         card, _ = parse_chat(t, store, llm=llm, mock=mock, sender=sender)
         return {"mode": "parse", "reply": card}
     if any(k in t for k in _QUERY_MARKERS):
-        return {"mode": "query", "reply": _colloquialize(query(t, store, llm), llm)}
-    card, _ = parse_chat(t, store, llm=llm, mock=mock)
+        return {"mode": "query",
+                "reply": _colloquialize(query(t, store, llm), llm, force=force_colloquial)}
+    card, _ = parse_chat(t, store, llm=llm, mock=mock, sender=sender)
     return {"mode": "parse", "reply": card}

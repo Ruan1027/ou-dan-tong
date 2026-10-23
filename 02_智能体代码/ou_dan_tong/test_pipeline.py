@@ -107,7 +107,7 @@ def test_pipeline():
     # ---------------- T4 日报简报 ----------------
     ck.section("T4 日报简报")
     b = briefing(store)
-    for key in ("新增订单", "待报价", "临期交付", "逾期任务"):
+    for key in ("新增订单", "沟通中（未定价）", "临期交付", "逾期任务"):
         ck.ok(key in b, f"T4 简报应含「{key}」", b)
 
     # ---------------- T5 迭代去重 ----------------
@@ -165,7 +165,7 @@ def test_pipeline():
                unit_price="8.0", delivery_date="2026-11-25", status_hint="生产中",
                source_excerpt="法兰盘300个，11-25交")], now=NOW)
     parse_chat("x", s3, mock=[_order(customer="温州机电", product="法兰盘", qty=300,
-               unit_price="8.0", delivery_date="2026-11-25", status_hint="已报价",
+               unit_price="8.0", delivery_date="2026-11-25", status_hint="沟通中",
                source_excerpt="法兰盘那单还是沟通中")], now=NOW)
     cur = s3.orders[0]
     ck.ok(cur["status"] == "生产中", "T9 低阶状态不应回退高阶状态", cur["status"])
@@ -235,7 +235,7 @@ def test_pipeline():
                status_hint="沟通中", source_excerpt="先问下价，数量没定")], now=NOW)
     parse_chat("x", s7, mock=[_order(customer="阿强", product="304不锈钢法兰盖",
                qty=200, unit_price="9.8", delivery_date=None,
-               status_hint="已报价", source_excerpt="先 200 个，单价 9.8 锁死")], now=NOW)
+               status_hint="沟通中", source_excerpt="先 200 个，单价 9.8 锁死")], now=NOW)
     ck.ok(len(s7.orders) == 1, "T12 报价闭环（询价→报价）只应有 1 单", len(s7.orders))
     ck.ok(s7.orders[0]["qty"] == 200, "T12 报价后数量应落到 200", s7.orders[0].get("qty"))
     ck.ok(str(s7.orders[0]["unit_price"]) == "9.8", "T12 报价后单价应落到 9.8",

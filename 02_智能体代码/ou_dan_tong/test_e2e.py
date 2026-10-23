@@ -191,7 +191,7 @@ def run():
         r = c.chat("出今日简报")
         reply = r.get("reply", "")
         ck.ok("📋" in reply or "简报" in reply, "输出简报卡片", reply[:60])
-        for kw in ("新增", "待报价", "临期", "逾期"):
+        for kw in ("新增", "沟通中（未定价）", "临期", "逾期"):
             ck.ok(kw in reply, f"简报含「{kw}」统计", reply[:100])
 
         # ---------- S9 幂等回归（REG-01） ----------

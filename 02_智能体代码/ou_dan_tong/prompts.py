@@ -7,7 +7,7 @@ EXTRACTION_SYSTEM = """你是制造企业订单要素提取器。从聊天记录
  "intent": "new | update | append | null",
  "customer": "客户称谓（公司名，或消息中对客户的称呼如「王工」；结合上下文归属，完全无线索才填 null）", "product": "", "spec": "", "qty": null,
  "unit_price": "可含'待报价'", "delivery_date": "YYYY-MM-DD|null",
- "sample_flag": "打样|大货|无", "status_hint": "沟通中|已报价|已确认|生产中|部分交付|已交付|已取消|null",
+ "sample_flag": "打样|大货|无", "status_hint": "沟通中|已确认|生产中|部分交付|已交付|已取消|null",
  "task_content": "", "owner": "", "task_deadline": "YYYY-MM-DD|null",
  "source_excerpt": "支撑本结论的原文片段，≤100字"
 }]
@@ -49,7 +49,7 @@ BRIEFING_SYSTEM = """把以下聚合数据汇总成一份简洁的今日订单�
 # 状态机单一真相源：直接复用 contracts.py（避免两份定义漂移，见 BUG-11 修复）
 # 交期同理：分批单的「该交付日」= 最晚批次日，统一走 contracts.effective_delivery_date
 from contracts import (STATUS_ORDER, STATUS_RANK, TERMINAL_STATUSES,  # noqa: E402,F401
-                       effective_delivery_date, valid_batches)
+                       effective_delivery_date, valid_batches, missing_dims)
 
 
 def batch_brief(order: dict) -> str:
@@ -64,6 +64,18 @@ def batch_brief(order: dict) -> str:
     return "分 %d 批：%s" % (len(bs), " / ".join(f"{b['date'][5:]}×{b['qty']}" for b in bs))
 
 
+def _status_tail(order: dict) -> str:
+    """状态后缀（C-13 产品口径）：沟通中必须带出「还差哪个维度没定」。
+
+    「沟通中」= 数/期/价至少一个没定 —— 只显示「沟通中」三个字，
+    等于把「缺什么」藏起来了，用户没法据此补信息。
+    """
+    if order.get("status") != "沟通中":
+        return ""
+    dims = missing_dims(order)
+    return ("（" + "、".join(dims) + "）") if dims else ""
+
+
 def card_text(order: dict, tasks: list, is_new: bool) -> str:
     tag = "已登记新订单" if is_new else "已更新订单"
     _note = batch_brief(order)
@@ -72,7 +84,7 @@ def card_text(order: dict, tasks: list, is_new: bool) -> str:
         f"📦 客户：{order['customer']}｜产品：{order['product']} {order.get('spec','')} ×{order.get('qty','?')}",
         f"💰 单价 {order.get('unit_price','待报价')} ｜ 📅 交期 {effective_delivery_date(order) or '待定'}"
         + (f"（{_note}）" if _note else "")
-        + f" ｜ 状态：{order.get('status')}",
+        + f" ｜ 状态：{order.get('status')}{_status_tail(order)}",
     ]
     if tasks:
         t = "；".join(f"{x['content']}" + (f"（{x['owner']}）" if x.get('owner') else "（待认领）") for x in tasks)
@@ -97,7 +109,7 @@ def append_card_text(order: dict) -> str:
         f"📦 客户：{order['customer']}｜产品：{order['product']} {order.get('spec','')} ×{order.get('qty','?')}",
         f"💰 单价 {order.get('unit_price','待报价')} ｜ 📅 交期 {effective_delivery_date(order) or '待定'}"
         + (f"（{_note}）" if _note else "")
-        + f" ｜ 状态：{order.get('status')}",
+        + f" ｜ 状态：{order.get('status')}{_status_tail(order)}",
     ]
     if order.get("source_excerpt"):
         lines.append(f"📎 依据：\"{order['source_excerpt']}\"")
@@ -107,7 +119,8 @@ def append_card_text(order: dict) -> str:
 def query_text(order: dict, suggestion: str = "") -> str:
     _note = batch_brief(order)
     base = (f"{order['customer']}的{order['product']} {order.get('spec','')} ×{order.get('qty','?')}，"
-            f"当前状态{order.get('status')}，预计{effective_delivery_date(order) or '待定'}交付"
+            f"当前状态{order.get('status')}{_status_tail(order)}，"
+            f"预计{effective_delivery_date(order) or '待定'}交付"
             + (f"（{_note}）" if _note else "") + "。")
     ev = f"📎 依据：\"{order.get('source_excerpt','')}\"。" if order.get("source_excerpt") else ""
     return base + ev + (suggestion and f" {suggestion}")
@@ -117,7 +130,7 @@ def briefing_text(stats: dict) -> str:
     today = stats.get("date", "")
     lines = [f"📋 {today} 订单协同简报",
              f"🆕 新增订单：{stats['new']} 笔（{stats.get('new_customers','')}）",
-             f"💰 待报价：{stats['pending_quote']} 笔（最急：{stats.get('most_urgent','无')}）",
+             f"💬 沟通中（未定价）：{stats['pending_quote']} 笔（最急：{stats.get('most_urgent','无')}）",
              f"⏰ 临期交付：{stats['due_soon']} 笔（{stats.get('due_list','')}）",
              f"❗ 逾期任务：{stats['overdue']} 项（{stats.get('overdue_list','')}）"]
     return "\n".join(lines)

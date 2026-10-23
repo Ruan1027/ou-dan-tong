@@ -11,7 +11,7 @@ SCENARIO1_CHAT = """王工：李经理，NMX-60 断路器外壳 5000 个，什�
 
 SCENARIO1_MOCK = [
     {"type": "order", "customer": "王工（XX电气）", "product": "NMX-60 断路器外壳", "spec": "",
-     "qty": 5000, "unit_price": "3.2", "delivery_date": "2026-11-20", "status_hint": "已报价",
+     "qty": 5000, "unit_price": "3.2", "delivery_date": "2026-11-20", "status_hint": "沟通中",
      "sample_flag": "打样", "source_excerpt": "NMX-60 外壳 5000 个，单价 3.2，11 月 20 号交…先安排打样 20 个"},
     {"type": "order", "customer": "万博机电", "product": "TND-3 稳压器", "spec": "",
      "qty": 200, "unit_price": "待报价", "delivery_date": "2026-10-28", "status_hint": "生产中",
@@ -38,7 +38,7 @@ SEED_MOCK = [
      "qty": 300, "unit_price": "8.0", "delivery_date": "2026-11-25", "status_hint": "沟通中",
      "sample_flag": "无", "source_excerpt": "温州机电 法兰盘 DN50 300个 11月25号交"},
     {"type": "order", "customer": "王工（XX电气）", "product": "NMX-60 断路器外壳", "spec": "",
-     "qty": 5000, "unit_price": "3.2", "delivery_date": "2026-11-20", "status_hint": "已报价",
+     "qty": 5000, "unit_price": "3.2", "delivery_date": "2026-11-20", "status_hint": "沟通中",
      "sample_flag": "打样", "source_excerpt": "王工 NMX-60 外壳 5000个 单价3.2 11月20号交"},
     {"type": "order", "customer": "万博机电", "product": "TND-3 稳压器", "spec": "",
      "qty": 200, "unit_price": "待报价", "delivery_date": "2026-10-28", "status_hint": "生产中",
@@ -62,7 +62,7 @@ WEB_DEMO_SEED = [
     {"type": "order", "customer": "陈老板（瑞安汽配）", "product": "轴承 6204", "spec": "",
      "qty": 150, "unit_price": "7.0", "delivery_date": "2026-11-01", "status_hint": "已确认",
      "sample_flag": "无", "source_excerpt": "陈老板 轴承6204 150个 7.0 11-01交"},
-    # 下面两单用于演示「同一台账并存多种状态」（模块二状态机 沟通中→已报价→已确认→生产中→…），
+    # 下面两单用于演示「同一台账并存多种状态」（模块二状态机 沟通中→已确认→生产中→部分交付→已交付），
     # 否则台账里清一色「已确认」，评审看不到状态机在跑。
     {"type": "order", "customer": "温州华信电器", "product": "继电器 JQX-13F", "spec": "",
      "qty": 300, "unit_price": "待报价", "delivery_date": "2026-11-05", "status_hint": "沟通中",

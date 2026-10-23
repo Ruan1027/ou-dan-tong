@@ -12,7 +12,7 @@ import re
 import datetime
 
 from contracts import (CheckStatus, ValidationResult, CHANGE_VERBS, VAGUE_QTY_WORDS,
-                       effective_delivery_date)
+                       effective_delivery_date, is_fully_confirmed, STATUS_RANK)
 from prompts import STATUS_RANK
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -74,33 +74,34 @@ def _missing_message(o: dict, raw_text: str = None, existing: dict = None):
     return msg
 
 
-# 状态推断兜底（模块二）：LLM 不给 status_hint 时，按原文与已抽字段确定性判定，
-# 不能一律落到「沟通中」——实测「PU 皮鞋面 900 个，1.8 一个，分两批…」LLM 返回
-# status_hint=null，于是一张已经报了具体单价的单停在「沟通中」，业务上说不通。
-# 顺序：取消 > 交付 > 生产 > 确认 > 有具体单价=已报价 > 沟通中。
+# 状态推断兜底（模块二）：LLM 不给 status_hint 时，按原文证据 + 数/期/价三维度确定性判定。
+# 产品口径（2026-10-23 用户定义）：
+#   沟通中 = 数/期/价至少一个没定（未定数/未定期/未定价，维度明细见 contracts.missing_dims）
+#   已确认 = 三个维度全部确定
+#   生产中/部分交付/已交付/已取消 = 原文带明确证据时才进入
+# 「已报价」已废弃：报价只是把价定了，不构成独立状态。
+# 顺序：取消 > 交付 > 部分交付 > 生产 > 三维度全齐=已确认 > 沟通中。
 _STATUS_HINT_RULES = (
     ("已取消", ("不要了", "取消", "作废", "退单")),
     ("已交付", ("已发货", "已交付", "已送到", "货已发", "已经发了")),
     ("部分交付", ("部分交付", "交了一部分", "出了一批")),
     ("生产中", ("排产", "在生产", "做货", "在做", "投料", "开机", "上线生产")),
-    ("已确认", ("下单了", "就这么定", "确认下单", "按这个来", "就按这个")),
 )
 
 
 def _infer_status(item: dict) -> str:
     """LLM 没给 status_hint 时的确定性状态推断（模块二）。
 
-    只做「原文里有明确证据」的判定，猜不出来就老实回「沟通中」，
-    不为了好看硬拔高状态。
+    只做「原文里有明确证据」的判定；数/期/价没齐就是「沟通中」，
+    不为好看硬拔高状态。
     """
     text = (item.get("source_excerpt") or "")
     for st, kws in _STATUS_HINT_RULES:
         if any(k in text for k in kws):
             return st
-    # 已经给出具体单价（非「待报价」）→ 报价环节已闭环，至少是「已报价」
-    up = str(item.get("unit_price") or "").strip()
-    if up and up not in ("待报价", "None", "null"):
-        return "已报价"
+    # 数 / 期 / 价 全部确定 → 已确认；否则沟通中（维度明细由 missing_dims 标注）
+    if is_fully_confirmed(item):
+        return "已确认"
     return "沟通中"
 
 
@@ -136,6 +137,14 @@ def validate_extraction(raw):
             dd = item.get("delivery_date")
             if dd and not DATE_RE.match(str(dd)):
                 dd = None
+            # 状态按产品口径确定性判定（数/期/价三维度 + 原文证据）。
+            # LLM 的 hint 只在比规则更高档时采纳（与状态机「只进不退」一致）——
+            # 否则三维全齐的单会被 LLM 随手的「沟通中」压回去。
+            # 「已报价」等废弃状态不在 STATUS_RANK 里，get(-1) 自然被忽略。
+            _rule_st = _infer_status(item)
+            _hint_st = (item.get("status_hint") or "").strip()
+            if _hint_st and STATUS_RANK.get(_hint_st, -1) > STATUS_RANK.get(_rule_st, -1):
+                _rule_st = _hint_st
             orders.append({
                 "customer": customer,
                 "product": product,
@@ -143,8 +152,7 @@ def validate_extraction(raw):
                 "qty": _to_int(item.get("qty")),
                 "unit_price": (item.get("unit_price") or "待报价").strip(),
                 "delivery_date": dd,
-                # 状态不允许「LLM 不给就落最低档」：没给 hint 就走确定性推断
-                "status": (item.get("status_hint") or "").strip() or _infer_status(item),
+                "status": _rule_st,
                 "sample_flag": item.get("sample_flag") or "无",
                 "source_excerpt": (item.get("source_excerpt") or "").strip()[:100],
                 # intent 必须透传：追加/更新/新建的分流决策全靠它（用户 2026-10-23 规则③）。

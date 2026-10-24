@@ -64,16 +64,12 @@
   .cbtn { border:1px solid #cbd5e1; background:#fff; color:#0f172a; border-radius:10px;
           padding:8px 12px; font-size:13px; font-weight:600; cursor:pointer; }
   .cbtn:hover { background:#f1f5f9; }
-  /* align-items:flex-end：输入框随内容增高时，发言人框与发送按钮贴底不被拉伸 */
-  .wx-input { display:flex; align-items:flex-end; gap:8px; padding:10px 14px;
-              background:#f7f7f7; border-top:1px solid #e0e0e0; }
+  .wx-input { display:flex; gap:8px; padding:10px 14px; background:#f7f7f7; border-top:1px solid #e0e0e0; }
   /* 发言人输入框：平台直接面向顾客，发信人即客户本人，必须随消息一起传下去 */
   .wx-input .wx-sender { width:80px; flex:0 0 auto; height:42px; border:1px solid var(--line);
                          border-radius:10px; padding:0 10px; font-size:13px; font-family:inherit;
                          text-align:center; color:var(--brand2); font-weight:600; }
-  /* min/max-height + overflow：配合 autoGrow() 支持 Shift+Enter 多行，超过 120px 内部滚动 */
-  .wx-input textarea { flex:1; resize:none; min-height:42px; max-height:120px; overflow-y:auto;
-                       line-height:1.45; border:1px solid var(--line); border-radius:10px;
+  .wx-input textarea { flex:1; resize:none; height:42px; border:1px solid var(--line); border-radius:10px;
                        padding:9px 12px; font-size:14px; font-family:inherit; }
   .wx-input button { border:none; border-radius:10px; padding:0 18px; font-weight:600; cursor:pointer;
                      background:var(--brand); color:#fff; flex:0 0 auto; }
@@ -647,14 +643,6 @@ function bindEnterToSend(node, onSend, guard){
     if(guard && !guard()) return;
     onSend();
   });
-}
-
-/* 多行自动增高：先把 height 归零再按 scrollHeight 撑开。
-   上限 120px 与 CSS max-height 一致，超过后由 overflow-y 滚动。 */
-function autoGrow(node){
-  if(!node) return;
-  node.style.height = "auto";
-  node.style.height = Math.min(node.scrollHeight, 120) + "px";
 }
 
 /* ---------- 台账渲染 ---------- */
@@ -1784,7 +1772,6 @@ async function init(){
 (function bindKeyboard(){
   const wi = el("wxInput");
   bindEnterToSend(wi, wxSendInput);
-  if(wi) wi.addEventListener("input", function(){ autoGrow(wi); });
 
   /* 查询框单行无换行语义，Enter / Shift+Enter 都触发查询。
      请求进行中按钮是 disabled，此时再按 Enter 不应重复发起。 */

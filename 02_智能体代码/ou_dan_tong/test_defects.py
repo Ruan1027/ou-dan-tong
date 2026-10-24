@@ -207,6 +207,25 @@ def probe_bug13():
     return (t1 == t2), f"首次导入 {t1} 任务，再次导入 {t2} 任务（应相等）｜ 任务号={ids}"
 
 
+def probe_bug14():
+    """「发货量减少 10%」百分比变更走不到更新：CHANGE_VERBS 缺「减少/调整」，
+    即使抽取已正确给出 900 公斤，原文命中冲突分支被拦截不落库（反向判据：
+    conflict 分支是假赦免——必须真落库 900 才算修好）。"""
+    s = fresh()
+    parse_chat("x", s, mock=[_order(C_WZ, "法兰盘", 1000, "18.5", "2026-10-28", "已确认",
+                                    excerpt="王总 304法兰盘 DN80 1吨 10-28交")], now=NOW)
+    # 百分比换算（1吨×90%=900kg）属抽取层职责，本探针只验契约/编排层：
+    card, _ = parse_chat("x", s, mock=[
+        _order(C_WZ, "法兰盘", 900, "18.5", "2026-10-28", "已确认",
+               excerpt="发货量减少10%，即只发900公斤")], now=NOW)
+    r = _rec(s, C_WZ)
+    updated = bool(r and r.get("qty") == 900)
+    conflict = "冲突待确认" in card
+    line = next((ln for ln in (card or "").splitlines() if ln.strip()), "(空卡片)")
+    return updated, (f"台账数量={r and r.get('qty')}（期望 900）｜ 冲突拦截={conflict}"
+                     f" ｜ {line[:40]}")
+
+
 def probe_regression_mock_dup():
     """回归验证：网页模拟模式「Mock 重复入库」（历史缺陷，5c507b7 已修）。"""
     s = fresh()
@@ -283,7 +302,7 @@ DEFECTS = [
          probe=probe_bug09),
     dict(id="BUG-10", severity="🟠 中", title="任务期限不支持时刻，口语期限被置空",
          owner="模块二·7 validator.py validate_extraction", who="队友A",
-         where="DATE_RE = ^\\d{4}-\d{2}-\d{2}$ 不接受「2026-10-21 17:00」，"
+         where="DATE_RE = ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ 不接受「2026-10-21 17:00」，"
                "task_deadline 直接被置 None → classify_task 恒判「期限缺失」",
          fix="放宽 DATE_RE 支持可选时刻（YYYY-MM-DD[ HH:MM]），"
              "或在抽取侧把「今天下班前 / 17:00 前」归一化为日期+时刻两字段；"
@@ -312,6 +331,21 @@ DEFECTS = [
          fix="建议：add_task 前按 (content, owner, deadline, order_id) 判重，"
              "命中既有任务时跳过或转为更新，与订单幂等口径对齐。",
          probe=probe_bug13),
+    dict(id="BUG-14", severity="🔴 高",
+         title="「发货量减少 10%」百分比变更三处失守：意图路由成查询 / 动词未命中判冲突 / 百分比无换算",
+         owner="模块二 contracts.CHANGE_VERBS + extractor.py / 模块四 agent.py", who="队友A / 队友C",
+         where="真实模式实测（2026-10-24 客户消息「昨天订 1 吨，发货量减少 10% 即 900 公斤」）："
+               "① 抽取层把变更意图判成 query，系统只回查询卡片、focus 命中无关订单"
+               "（ORD-05 刹车片 ×80），数量一字未改，还给了误导性确认；"
+               "② 契约层 CHANGE_VERBS 缺「减少/调整」（仅有 减到/降到/少到/减成），"
+               "受控实验证明：即使抽取已给出 900 公斤，原文仍命中冲突分支"
+               "「台账 1000 ↔ 来单 900」被拦截不落库；"
+               "③ 百分比换算（1吨×90%=900kg）全靠 LLM 现场算，抽取层无换算兜底。",
+         fix="① agent/query 路由：含「减少/增加 X%」的消息视为变更而非查询；"
+             "② contracts.CHANGE_VERBS 增补「减少/减少到/调整为/调整到/调整」；"
+             "③ extractor 对百分比表达式归一化为绝对数再下发（1吨→1000kg→900kg），"
+             "并登记换算依据回写 source_excerpt。",
+         probe=probe_bug14),
 ]
 
 REGRESSIONS = [

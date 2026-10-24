@@ -9,7 +9,6 @@ from llm import LLM
 from prompts import (card_text, query_text, briefing_text, append_card_text,
                      missing_card_text, conflict_card_text, disambig_card_text,
                      nochange_card_text, append_pending_card_text,
-                     pending_update_card_text,
                      HUMAN_HANDOFF, STATUS_ORDER)
 from store import Store
 from validator import (validate_extraction, apply_change, classify_order, classify_task,
@@ -113,23 +112,14 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
                 _src = (o.get("source_excerpt") or "").strip()
                 if _src:
                     patch["source_excerpt"] = _src
-                # 2026-10-24 应队长需求：关键字段（数量/单价/交期）变更先确认再落库。
-                # 仅多轮会话（有 session_key）挂起；直接调 parse_chat 的批处理/测试
-                # 场景无交互对象，保持直接落库。
-                if session_key and any(k in patch for k in _KEY_FIELDS):
-                    if len(_PENDING_CTX) >= _PENDING_MAX:
-                        _PENDING_CTX.pop(next(iter(_PENDING_CTX)))
-                    _PENDING_CTX[session_key] = {
-                        "order_id": existing["order_id"], "patch": patch,
-                        "change": change, "ts": time.time()}
-                    out.append(("pending_update", existing))
-                else:
-                    store.update_order(existing["order_id"], patch, change)
-                    if "flags" in existing and existing["flags"]:
-                        existing["flags"].pop("conflict", None)
-                        existing["flags"].pop("missing", None)
-                        store.update_order(existing["order_id"], {}, None)
-                    out.append(("update", existing))
+                # 2026-10-24 恢复「直接更新」（撤销 #34 的先确认再更改）：
+                # 改数量 / 单价 / 交期一律即时落库并留变更履历，不再挂起等客户回「是」。
+                store.update_order(existing["order_id"], patch, change)
+                if "flags" in existing and existing["flags"]:
+                    existing["flags"].pop("conflict", None)
+                    existing["flags"].pop("missing", None)
+                    store.update_order(existing["order_id"], {}, None)
+                out.append(("update", existing))
             else:
                 # BUG-07 修复：内容完全一致时不再输出"已更新订单"，标记为无变化
                 out.append(("nochange", existing))
@@ -166,10 +156,6 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
     for i, (kind, rec) in enumerate(out):
         if kind == "nochange":
             cards.append(nochange_card_text(rec))
-            continue
-        if kind == "pending_update":
-            _pd = _PENDING_CTX.get(session_key) or {}
-            cards.append(pending_update_card_text(rec, _pd.get("patch", {})))
             continue
         if kind == "append":
             cards.append(append_card_text(rec))
@@ -216,16 +202,6 @@ _CTX_MAX = 500         # C-2：上限，防止大量一次性 session_key 常驻
 #                       "customer": "...", "product": "...", "ts": time.time()}}
 _DISAMBIG_CTX = {}
 
-# ---- 2026-10-24 应队长需求：关键字段变更「先确认再更改」 ----
-# 改数量/单价/交期这类关键字段时，先把订单当前信息和拟改动发给客户确认，
-# 客户回「是」才落库，回「否」取消。状态/规格/样品等低风险字段仍直接落库。
-# 仅在带 session_key 的多轮会话（handle_message）中生效；
-# 直接调 parse_chat（无 session_key，测试/批处理场景）保持直接落库，行为不变。
-# 结构：{session_key: {"order_id": ..., "patch": {...}, "change": {...}, "ts": ...}}
-_PENDING_CTX = {}
-# 触发确认的关键字段（契约层语义：这三项直接影响钱和交付，改错代价最高）
-_KEY_FIELDS = ("qty", "unit_price", "delivery_date")
-_PENDING_MAX = 500
 # C-6：补温州话常用说法（那批货 / 上一单）。刻意不加裸「那批」——「法兰那批的货」里
 # 它是量词不是指代，加了会让改单话术误触发范围锁定。
 _PRONOUNS = ("刚才那单", "刚才的单", "刚刚那单", "这一单", "那一单", "上一个单",
@@ -1093,33 +1069,6 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str =
                 _DISAMBIG_CTX.pop(session_key, None)
                 return {"mode": "handoff", "reply": HUMAN_HANDOFF}
 
-    # 2026-10-24 应队长需求：关键字段变更「先确认再更改」的应答路由。
-    # 优先级：消歧 > 待确认变更 > 通用 handoff/confirm。
-    # 客户回「是」→ 应用挂起的 patch 并回发更新后的订单信息；
-    # 回「否」→ 取消本次修改，台账保持原样。
-    _pd_ctx = _PENDING_CTX.get(session_key)
-    if _pd_ctx and (time.time() - _pd_ctx.get("ts", 0)) >= _CTX_TTL:
-        _PENDING_CTX.pop(session_key, None)
-        _pd_ctx = None
-    if _pd_ctx and _is_yes:
-        _PENDING_CTX.pop(session_key, None)
-        _ord = store.get_order(_pd_ctx["order_id"])
-        if _ord is None:
-            return {"mode": "update_confirm",
-                    "reply": "该订单已不在台账中，无法应用本次修改，请重新告诉我变更内容。"}
-        store.update_order(_ord["order_id"], _pd_ctx["patch"], _pd_ctx["change"])
-        if _ord.get("flags"):
-            _ord["flags"].pop("conflict", None)
-            _ord["flags"].pop("missing", None)
-            store.update_order(_ord["order_id"], {}, None)
-        _card = card_text(_ord, [], is_new=False)
-        return {"mode": "update_confirm",
-                "reply": "好的，已按您的要求完成修改：\n\n" + _card}
-    if _pd_ctx and _is_no:
-        _PENDING_CTX.pop(session_key, None)
-        return {"mode": "update_cancel",
-                "reply": "好的，已取消本次修改，台账保持原样。"}
-
     # 非消歧状态的通用 handoff/confirm（冲突确认环节）
     if _is_reject:
         return {"mode": "handoff", "reply": HUMAN_HANDOFF}
@@ -1152,8 +1101,6 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str =
         return out
     # 订单/改单意图优先：含变更动词或数量/价格数值主张时，即使带「那单」也按群聊解析
     if _looks_like_order(t):
-        # 客户发来新的订单/变更消息：先前挂起的待确认变更视为被新指令取代，丢弃
-        _PENDING_CTX.pop(session_key, None)
         card, _ = parse_chat(t, store, llm=llm, mock=mock, sender=sender,
                              session_key=session_key)
         # 兜底：抽不出任何订单/任务时必须给可见反馈，不能返回空字符串

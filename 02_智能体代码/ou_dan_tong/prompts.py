@@ -270,36 +270,6 @@ def nochange_card_text(existing: dict) -> str:
     return "\n".join(lines)
 
 
-_FIELD_CN = {"qty": "数量", "unit_price": "单价", "delivery_date": "交期",
-             "spec": "规格", "sample_flag": "样品", "status": "状态"}
-
-
-def pending_update_card_text(existing: dict, patch: dict) -> str:
-    """变更待确认卡片 —— 关键字段（数量/单价/交期）改动先确认再落库
-    （2026-10-24 应队长需求：修改订单先发一遍订单信息，客户确认后再更改）。
-
-    1. 先逐行展示订单当前信息（订单号/客户/产品/单价/数量/交期/状态）；
-    2. 列出拟改动清单（字段：旧值 → 新值），让客户一眼看到要改什么；
-    3. 空一行后请客户回复 是/否；确认后才落库，取消则台账保持原样。
-    """
-    lines = [f"🟡 变更待确认 {existing.get('order_id','')}"]
-    lines.append("── 订单当前信息 ──")
-    lines.extend(_order_fields_block(existing))
-    lines.append("── 拟改动 ──")
-    for k, v in patch.items():
-        if k == "source_excerpt":
-            continue
-        cn = _FIELD_CN.get(k, k)
-        old_v = effective_delivery_date(existing) if k == "delivery_date" else existing.get(k)
-        old_v = old_v if old_v not in (None, "") else "（空）"
-        lines.append(f"· {cn}：{old_v} → {v}")
-    lines.append("")
-    lines.append("· 回复「是」→ 确认修改，我改完再发一次订单信息；")
-    lines.append("· 回复「否」→ 取消本次修改，台账保持原样。")
-    lines.append("请回复 是/否")
-    return "\n".join(lines)
-
-
 def disambig_card_text(order: dict, index: int, total: int) -> str:
     """消歧卡片 —— 从候选订单中拿出一个问客户「是否是这个订单」。
 

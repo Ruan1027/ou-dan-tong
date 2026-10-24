@@ -245,13 +245,43 @@ def nochange_card_text(existing: dict) -> str:
     （幂等去重），但客户看不到现值无从判断。现改为：
       1. 逐行展示台账中这单的当前数据（数量/交期/状态等）；
       2. 说明：您要求的数值与台账一致，所以未重复写入；
-      3. 引导：如果要改成别的数值，直接说目标值即可。
+      3. 引导：如果要改成其他数值，直接告诉我目标值即可。
     """
     lines = [f"⏸️ 无变化 {existing.get('order_id','')}"]
     lines.append("── 台账当前记录 ──")
     lines.extend(_order_fields_block(existing))
     lines.append("您提供的信息与台账记录一致，未重复写入。")
     lines.append("💡 如果要改成其他数值，直接告诉我目标值即可（如「改成 100 个」）。")
+    return "\n".join(lines)
+
+
+_FIELD_CN = {"qty": "数量", "unit_price": "单价", "delivery_date": "交期",
+             "spec": "规格", "sample_flag": "样品", "status": "状态"}
+
+
+def pending_update_card_text(existing: dict, patch: dict) -> str:
+    """变更待确认卡片 —— 关键字段（数量/单价/交期）改动先确认再落库
+    （2026-10-24 应队长需求：修改订单先发一遍订单信息，客户确认后再更改）。
+
+    1. 先逐行展示订单当前信息（订单号/客户/产品/单价/数量/交期/状态）；
+    2. 列出拟改动清单（字段：旧值 → 新值），让客户一眼看到要改什么；
+    3. 空一行后请客户回复 是/否；确认后才落库，取消则台账保持原样。
+    """
+    lines = [f"🟡 变更待确认 {existing.get('order_id','')}"]
+    lines.append("── 订单当前信息 ──")
+    lines.extend(_order_fields_block(existing))
+    lines.append("── 拟改动 ──")
+    for k, v in patch.items():
+        if k == "source_excerpt":
+            continue
+        cn = _FIELD_CN.get(k, k)
+        old_v = effective_delivery_date(existing) if k == "delivery_date" else existing.get(k)
+        old_v = old_v if old_v not in (None, "") else "（空）"
+        lines.append(f"· {cn}：{old_v} → {v}")
+    lines.append("")
+    lines.append("· 回复「是」→ 确认修改，我改完再发一次订单信息；")
+    lines.append("· 回复「否」→ 取消本次修改，台账保持原样。")
+    lines.append("请回复 是/否")
     return "\n".join(lines)
 
 
@@ -266,9 +296,9 @@ def disambig_card_text(order: dict, index: int, total: int) -> str:
     lines = [f"🟡 信息缺失，请确认：以下是否是您要查询/修改的订单？（第 {index}/{total} 个匹配）"]
     lines.append("── 订单数据 ──")
     lines.extend(_order_fields_block(order))
+    lines.append("")
     lines.append(f"· 回复「是」→ 以此订单为准，我给您更新后的信息；")
     lines.append(f"· 回复「否」→ {'继续查找其他匹配订单' if index < total else '已无更多匹配订单，将转接人工'}")
-    lines.append("")
     lines.append("请回复 是/否")
     return "\n".join(lines)
 
@@ -292,10 +322,9 @@ def conflict_card_text(existing: dict, conflict_msg: str) -> str:
     lines.append("── 矛盾点 ──")
     lines.append(conflict_msg)
     lines.append("❓ 请确认：是否就是这个订单？数据以我们台账记录的为准。")
+    lines.append("")
     lines.append("· 回复「是的 / 确认」→ 以台账数据为准，不做更改；")
     lines.append("· 回复「不是 / 不同意」→ " + HUMAN_HANDOFF)
-    lines.append("")
-    lines.append("请回复 是/否")
     return "\n".join(lines)
 
 

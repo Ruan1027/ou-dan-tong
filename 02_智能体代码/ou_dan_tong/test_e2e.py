@@ -166,10 +166,20 @@ def run():
         # 现在用 seed 中的「李姐（瓯越五金贸易）/ DZ47-63 三相断路器」（预置 50），
         # 配 scenario="update"（预置抽取 80）→ 期望更新为 80。
         print("\n[S6] 粘贴更新消息（评委点名：最新状态 + 留痕）")
+        # 2026-10-24 起关键字段变更「先确认再更改」：先出待确认卡片，回「是」才落库
         before = len(c.ledger().get("orders", []))
         r = c.chat("小陈，DZ47 那个加到 80 个", scenario="update")
         reply = r.get("reply", "")
-        ck.ok("✅" in reply or "已更新" in reply, "卡片呈现更新成功话术", reply[:80])
+        ck.ok("变更待确认" in reply and "50 → 80" in reply,
+              "先出变更待确认卡片（展示当前信息+拟改动 50 → 80）", reply[:80])
+        dz0 = next((o for o in c.ledger().get("orders", [])
+                    if "DZ47" in str(o.get("product", ""))), None)
+        ck.ok(dz0 is not None and dz0.get("qty") == 50,
+              "确认前台账保持 50（挂起未落库）", f"qty={dz0 and dz0.get('qty')}")
+        r = c.chat("是")
+        reply = r.get("reply", "")
+        ck.ok("已按您的要求完成修改" in reply or "已更新" in reply,
+              "回「是」后回发更新后的订单信息", reply[:80])
         after = len(c.ledger().get("orders", []))
         ck.ok(after == before, f"更新不重复建单（{before} → {after}）", f"{before}→{after}")
         dz = next((o for o in c.ledger().get("orders", [])

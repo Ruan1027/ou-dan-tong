@@ -225,9 +225,10 @@ def disambig_card_text(order: dict, index: int, total: int) -> str:
     lines = [f"🟡 信息缺失，请确认：以下是否是您要查询/修改的订单？（第 {index}/{total} 个匹配）"]
     lines.append("── 订单数据 ──")
     lines.extend(_order_fields_block(order))
-    lines.append("❓ 请回复「是」或「否」：")
-    lines.append("· 回复「是」→ 以此订单为准，我给您更新后的信息；")
+    lines.append(f"· 回复「是」→ 以此订单为准，我给您更新后的信息；")
     lines.append(f"· 回复「否」→ {'继续查找其他匹配订单' if index < total else '已无更多匹配订单，将转接人工'}")
+    lines.append("")
+    lines.append("请回复 是/否")
     return "\n".join(lines)
 
 
@@ -252,6 +253,8 @@ def conflict_card_text(existing: dict, conflict_msg: str) -> str:
     lines.append("❓ 请确认：是否就是这个订单？数据以我们台账记录的为准。")
     lines.append("· 回复「是的 / 确认」→ 以台账数据为准，不做更改；")
     lines.append("· 回复「不是 / 不同意」→ " + HUMAN_HANDOFF)
+    lines.append("")
+    lines.append("请回复 是/否")
     return "\n".join(lines)
 
 

@@ -6,8 +6,9 @@
       只能经 confirm_update 人工确认后写入；状态流转受状态机约束
 - 三·3 持久化与读写：原子写盘、损坏文件自动备份兜底、get/update/query 增改查
 - 三·4 一致性校验与修复：integrity_check + repair（重复ID/缺失字段/非法状态/孤儿引用）
-- 三·5 进度状态机：基于 contracts.STATUS_ORDER（沟通中→已报价→已确认→生产中→已交付）
-      单向流转，禁止状态回退（force 需人工显式调用）
+- 三·5 进度状态机：基于 contracts.STATUS_ORDER 单向流转，禁止状态回退（force 需人工显式调用）
+      业务口径 2026-10-24：取消「已报价」，沟通中细分 未定数/未定期/未定价（missing_info_tags），
+      「已确认」= 数量/交期/单价 三项齐全（integrity_check 守卫）
 
 铁律：契约字段以 contracts.py 为准，本文件只加实现、不改契约；既有方法签名
 （add_order / update_order / find_active / query_* 等）保持向下兼容，模块二/四/五
@@ -23,21 +24,62 @@ from contracts import STATUS_ORDER, STATUS_RANK, TERMINAL_STATUSES
 
 # 任务清单口径（待确认→生产中→已发货→已完成）与契约口径（沟通中→…→已交付）的别名映射。
 # 契约 STATUS_ORDER 是单一真相源，别名仅做归一化，不新增状态。
+#
+# 业务口径变更（2026-10-24，队友D 模块三）：取消「已报价」状态。
+# 新流程：沟通中（细分：未定数/未定期/未定价）→ 已确认 → 生产中 → 部分交付 → 已交付 / 已取消。
+# - 「已报价」历史数据自动归一化为「沟通中」，不再产生新的已报价单；
+# - 「未定数/未定期/未定价」不是独立状态，是沟通中的缺失细分（见 missing_info_tags），
+#   可多项并存（既没报数又没定期 → ["未定数","未定期"]），单状态字段表达不了组合缺失；
+# - 契约层（contracts.py STATUS_ORDER 移除已报价）需队长/队友A 走 PR 全员确认后同步，
+#   同步前 store 层先收口（next_statuses 视图过滤），契约改后过滤自动失效。
 STATUS_ALIASES = {
     "待确认": "已确认",
     "已发货": "已交付",
     "已完成": "已交付",
+    "已报价": "沟通中",
 }
+
+# 沟通中的三种信息缺失细分（业务口径 2026-10-24）
+INFO_MISSING_TAGS = ("未定数", "未定期", "未定价")
+
+# 旧口径中已存在、新口径已取消的状态（store 层视图统一隐藏）
+RETIRED_STATUSES = ("已报价",)
+
+
+def missing_info_tags(order: dict):
+    """沟通中订单的信息缺失细分（模块级纯函数，供展示/追问/简报复用）。
+
+    - 未定数：客户没报数（信息缺失）；「客户报了但商家还没确定接不接」现阶段不涉及
+    - 未定期：客户没定期限（信息缺失）；商家未确认交期同理现阶段不涉及
+    - 未定价：客户没报价（单价缺失或「待报价」占位）
+    返回标签列表，可同时含多项；三项齐全返回 []（对应「已确认」的前提）。
+    """
+    tags = []
+    qty = order.get("qty")
+    if not (isinstance(qty, int) and not isinstance(qty, bool) and qty > 0):
+        tags.append("未定数")
+    if not str(order.get("delivery_date") or "").strip():
+        tags.append("未定期")
+    up = str(order.get("unit_price") or "").strip()
+    if not up or up == "待报价":
+        tags.append("未定价")
+    return tags
 
 # 冲突/异常人工确认前，禁止自动覆盖的字段（模块三·2）
 LOCKABLE_FIELDS = ("qty", "unit_price", "delivery_date", "status")
 
 
 def normalize_status(s):
-    """状态归一化：契约合法值原样返回；别名映射到契约值；未知值返回 None（交由 integrity_check 标记）。"""
+    """状态归一化：契约合法值原样返回；别名映射到契约值；未知值返回 None（交由 integrity_check 标记）。
+
+    已废止状态（RETIRED_STATUSES，如「已报价」）即使契约尚未移除，也走别名归一化——
+    store 层先收口，保证新口径下不再产生废止状态的单。
+    """
     s = (s or "").strip()
     if not s:
         return None
+    if s in RETIRED_STATUSES:
+        return STATUS_ALIASES.get(s)
     if s in STATUS_RANK:
         return s
     return STATUS_ALIASES.get(s)
@@ -70,11 +112,15 @@ def can_transition(old_status, new_status):
 
 
 def next_statuses(status):
-    """给定状态的合法后续状态列表（不含自身）。"""
+    """给定状态的合法后续状态列表（不含自身）。
+
+    新口径下视图统一隐藏「已报价」；契约层移除已报价后此过滤自动变空操作。
+    """
     cur = normalize_status(status)
     if cur is None:
-        return list(STATUS_ORDER)
-    return STATUS_ORDER[STATUS_RANK[cur] + 1:]
+        return [s for s in STATUS_ORDER if s not in RETIRED_STATUSES]
+    return [s for s in STATUS_ORDER[STATUS_RANK[cur] + 1:]
+            if s not in RETIRED_STATUSES]
 
 
 def _now():
@@ -632,6 +678,12 @@ class Store:
             st = normalize_status(o.get("status"))
             if st is None and o.get("status") != "待补充":
                 _issue("error", "order", oid, f"非法状态「{o.get('status')}」")
+            # 新口径守卫：「已确认」= 数量/交期/单价三项齐全；缺项说明确认过早
+            if o.get("status") == "已确认":
+                miss = missing_info_tags(o)
+                if miss:
+                    _issue("warn", "order", oid,
+                           f"已确认单仍缺「{'、'.join(miss)}」，建议核实或退回沟通中")
             q = o.get("qty")
             if q is not None:
                 qi = q if isinstance(q, int) and not isinstance(q, bool) else None

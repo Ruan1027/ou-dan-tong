@@ -254,6 +254,17 @@ def test_pipeline():
     ck.ok(s8.tasks[0]["task_id"].startswith("TSK-"), "T13 任务号格式应为 TSK-*",
           s8.tasks[0].get("task_id"))
     ck.ok(s8.tasks[0]["owner"] == "老周", "T13 任务应保留负责人", s8.tasks[0].get("owner"))
+    # BUG-13 晋升（2026-10-24，探针已转绿 -> 硬断言）：任务与订单同口径幂等——
+    # 同一段消息二次导入，任务不得重复入库、任务号不得漂移。
+    # 此前只挂在 test_defects 探针（退出码 0 不阻断），回归会悄悄漏掉。
+    _t13_id = s8.tasks[0]["task_id"]
+    parse_chat("x", s8, mock=[
+        {"type": "task", "task_content": "跟进物流单号", "owner": "老周",
+         "task_deadline": "2026-10-22"}], now=NOW)
+    ck.ok(len(s8.tasks) == 1, "T13 任务幂等：同消息二次导入不新增任务",
+          [t.get("task_id") for t in s8.tasks])
+    ck.ok(s8.tasks[0]["task_id"] == _t13_id, "T13 任务幂等：任务号不漂移",
+          f"{_t13_id} -> {s8.tasks[0]['task_id']}")
 
     # ---------------- T14 批次交期契约（D-1/D-3，PR #14 合入） ----------------
     # 批次交期的**单一真相源**是 contracts.effective_delivery_date —— A-2（validator 冲突比对）
@@ -317,6 +328,63 @@ def test_pipeline():
     ck.ok(rec9 is not None and effective_delivery_date(rec9) == "2026-11-03",
           "T14 全链路：分批单有效交期应为最晚批次 11-03",
           rec9 and effective_delivery_date(rec9))
+
+    # ---- T15 卡片换行守卫（2026-10-24 应队长需求）----
+    # 每个字段独占一行，旧版「客户｜产品」「单价｜交期｜状态」挤一行用 ｜ 分隔，
+    # 移动端窄屏折行错位。守卫：拆行后每行不得同时含两个不同字段标签。
+    ck.section("T15 卡片换行：每项字段独占一行")
+    from prompts import card_text, append_card_text, query_text
+    _o15 = {"order_id": "ORD-TEST-15", "customer": "测试客户", "product": "测试产品",
+            "spec": "A1", "qty": 100, "unit_price": "9.9", "delivery_date": "2026-11-01",
+            "status": "已确认", "sample_flag": "无",
+            "source_excerpt": "减少10%即90个"}
+    _card = card_text(_o15, [], is_new=False)
+    _lines = [ln for ln in _card.splitlines() if ln.strip()]
+    # 每行最多含 1 个字段标签（👤📦📊💰📅📌📎），不得把两个不同字段挤一行
+    _labels = ["👤", "📦", "📊", "💰", "📅", "📌", "📎"]
+    _bad_lines = [ln for ln in _lines if sum(1 for lb in _labels if lb in ln) > 1]
+    ck.ok(not _bad_lines, "T15 卡片每行不得挤两个以上字段标签", _bad_lines)
+    ck.ok(any("👤 客户" in ln for ln in _lines), "T15 含「客户」独立行", _card[:80])
+    ck.ok(any("📦 产品" in ln for ln in _lines), "T15 含「产品」独立行", _card[:80])
+    ck.ok(any("📊 数量" in ln for ln in _lines), "T15 含「数量」独立行", _card[:80])
+    ck.ok(any("💰 单价" in ln for ln in _lines), "T15 含「单价」独立行", _card[:80])
+    ck.ok(any("📅 交期" in ln for ln in _lines), "T15 含「交期」独立行", _card[:80])
+    ck.ok(any("📌 状态" in ln for ln in _lines), "T15 含「状态」独立行", _card[:80])
+    ck.ok(any("📎 依据" in ln for ln in _lines), "T15 含「依据」独立行", _card[:80])
+    # query_text 同口径
+    _q = query_text(_o15)
+    _qlines = [ln for ln in _q.splitlines() if ln.strip()]
+    ck.ok(len(_qlines) >= 3, "T15 查询回复也按字段换行（≥3行）", _q[:80])
+
+    # ---- T16 变更关键词契约守卫（2026-10-24 应队长需求 + BUG-14）----
+    # CHANGE_VERBS 必须覆盖「减少/调整/增加」系动词，否则「发货量减少10%」
+    # 即使抽取正确给出 900 也会被判冲突拦截不落库。
+    ck.section("T16 变更关键词契约：减少/调整/增加 系动词必须命中")
+    from contracts import CHANGE_VERBS, RATIO_KEYWORDS
+    for v in ("减少", "减少到", "调整", "调整为", "增加", "增加到"):
+        ck.ok(v in CHANGE_VERBS, f"T16 CHANGE_VERBS 必须含「{v}」", CHANGE_VERBS)
+    # 百分比/倍数量词触发词
+    for kw in ("百分之", "%", "一半", "几倍", "翻倍"):
+        ck.ok(kw in RATIO_KEYWORDS, f"T16 RATIO_KEYWORDS 必须含「{kw}」", RATIO_KEYWORDS)
+    # 受控实验：预置 1000，发「减少10%即900公斤」抽取行，必须落库 900 且无冲突
+    s16 = Store()
+    s16.reset()
+    parse_chat("x", s16, mock=[_order(customer="温州机电", product="法兰盘",
+                                       qty=1000, unit_price="18.5",
+                                       delivery_date="2026-10-28",
+                                       status_hint="已确认",
+                                       source_excerpt="1吨 10-28交")], now=NOW)
+    _c16, _ = parse_chat("x", s16, mock=[_order(customer="温州机电", product="法兰盘",
+                                                 qty=900, unit_price="18.5",
+                                                 delivery_date="2026-10-28",
+                                                 status_hint="已确认",
+                                                 source_excerpt="发货量减少10%，即只发900公斤")],
+                         now=NOW)
+    _r16 = s16.orders[0] if s16.orders else {}
+    ck.ok(_r16.get("qty") == 900, "T16 减少10%后台账应落库 900", _r16.get("qty"))
+    ck.ok("冲突待确认" not in (_c16 or ""), "T16 减少系动词命中后不得判冲突", (_c16 or "")[:60])
+    ck.ok("减少10%" in (_r16.get("source_excerpt") or ""),
+          "T16 依据必须保留「减少10%」关键词", _r16.get("source_excerpt"))
 
     ck.report()
     print("-" * 46)

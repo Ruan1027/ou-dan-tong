@@ -17,8 +17,40 @@ import re
 import json
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-CHAT_LOGS_PATH = os.path.normpath(
-    os.path.join(_HERE, "..", "..", "03_演示数据", "data", "chat_logs.json"))
+
+
+def _resolve_chat_logs():
+    """按多种目录布局定位模块一数据集，顺序：
+
+    ① 环境变量 ODT_CHAT_LOGS（显式指定，优先级最高）
+    ② 开发仓库布局  <repo>/03_演示数据/data/chat_logs.json
+    ③ 交付包布局    <包>/演示数据/data/chat_logs.json
+    ④ 兜底：自本目录向上 4 层，逐层找 data 或 演示数据/data 下的 chat_logs.json
+
+    为什么要多种布局：交付 zip 的目录结构与开发仓库不同（代码在 ou_dan_tong/、
+    数据在 演示数据/data/）。旧版硬编码 ②，导致交付包里即使数据文件齐全，
+    场景走查仍报「数据集缺失」——测试不随包走，等于没测。
+    """
+    cands = []
+    env = os.environ.get("ODT_CHAT_LOGS")
+    if env:
+        cands.append(env)
+    cands.append(os.path.join(_HERE, "..", "..", "03_演示数据", "data", "chat_logs.json"))
+    cands.append(os.path.join(_HERE, "..", "演示数据", "data", "chat_logs.json"))
+    cands.append(os.path.join(_HERE, "..", "..", "演示数据", "data", "chat_logs.json"))
+    d = _HERE
+    for _ in range(4):
+        d = os.path.dirname(d)
+        cands.append(os.path.join(d, "data", "chat_logs.json"))
+        cands.append(os.path.join(d, "演示数据", "data", "chat_logs.json"))
+    for c in cands:
+        p = os.path.normpath(c)
+        if os.path.exists(p):
+            return p
+    return os.path.normpath(cands[1])
+
+
+CHAT_LOGS_PATH = _resolve_chat_logs()
 
 # 场景走查统一使用固定「今天」，保证异常/临期等日期类判定可复现
 FIXED_NOW = "2026-10-21T10:00:00"
@@ -39,8 +71,21 @@ P_MOTOR = "电机壳 Y2-132"
 # 模块一数据集加载与契约校验
 # ---------------------------------------------------------------------------
 def load_chat_logs(path: str = CHAT_LOGS_PATH):
+    # 显式指定优先，且不做静默回退：路径写错就该立刻报错，否则「以为在测 A 数据、
+    # 实际在测 B 数据」的静默串台比缺文件更难排查。
+    env = os.environ.get("ODT_CHAT_LOGS")
+    if env:
+        env_path = os.path.normpath(env)
+        if not os.path.exists(env_path):
+            raise FileNotFoundError(
+                f"ODT_CHAT_LOGS 指向的数据集不存在：{env_path}\n"
+                f"  显式指定的路径不做回退，请修正该环境变量后重跑。")
+        path = env_path
     if not os.path.exists(path):
-        raise FileNotFoundError(f"模块一数据集缺失：{path}（模块五·2 依赖模块一数据）")
+        raise FileNotFoundError(
+            f"模块一数据集缺失：{path}（模块五·2 依赖模块一数据）\n"
+            f"  已按 ODT_CHAT_LOGS → 03_演示数据/data → 演示数据/data → 向上4层 依次查找均未命中。\n"
+            f"  可设置环境变量 ODT_CHAT_LOGS=<chat_logs.json 绝对路径> 显式指定。")
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     return data if isinstance(data, list) else data.get("groups", [])

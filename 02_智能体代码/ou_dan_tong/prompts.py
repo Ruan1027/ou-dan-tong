@@ -34,7 +34,21 @@ EXTRACTION_SYSTEM = """你是制造企业订单要素提取器。从聊天记录
        「再给我加 200 个，跟上次一起发」→ update（原单数量改成 5200）。
 10. **分批交货时 qty 填总数量**（各批之和），不要把某一批的数量当成订单总数量。
    例：「900 个，分两批：11-01 出 500，11-03 出 400」→ qty=900，delivery_date=2026-11-03
-   （全部交完的日期），source_excerpt 保留完整的批次原话。"""
+   （全部交完的日期），source_excerpt 保留完整的批次原话。
+11. **source_excerpt 必须精准保留变更关键词**（2026-10-24 应队长需求）：
+    当客户用增减表达修改数量时，依据片段必须原样包含这些关键词，不得只留数字：
+    - 百分比：「减少 10%」「增加 20%」「降 5 个百分点」「涨百分之三十」
+    - 倍数/分数：「减半」「一半」「翻倍」「两倍」「三倍」「三分之一」
+    - 增减动词：「减少到 / 减为 / 降低 / 增加 / 增加到 / 提升 / 调整为 / 调整到 / 调一下」
+    - 折扣：「打九折 / 打八折 / 打半折」
+    例：原文「发货量减少10%，即只发900公斤」→ source_excerpt 填
+    「发货量减少10%，即只发900公斤」（含「减少10%」关键词 + 换算后绝对数 900 公斤），
+    不要只填「只发900公斤」丢了「减少10%」。
+12. **百分比/倍数必须换算成绝对数量**填入 qty，不要把「10%」「一半」直接当数量：
+    - 「1吨减少10%」→ qty=900（单位公斤），source_excerpt 保留「减少10%」原话
+    - 「500个减半」→ qty=250，source_excerpt 保留「减半」原话
+    - 「200个翻倍」→ qty=400，source_excerpt 保留「翻倍」原话
+    换算依据同时写进 source_excerpt，让台账「依据」一栏能看出是怎么算出来的。"""
 
 # 发送者身份规则：真实微信群每条消息都带发言人昵称，网页端必须一并传入。
 # 缺了它，像「小陈，DZ47 那个加到 80 个」这种客户自报场景会被判成「无客户」而整条丢弃。
@@ -81,14 +95,22 @@ def _status_tail(order: dict) -> str:
 
 
 def card_text(order: dict, tasks: list, is_new: bool) -> str:
+    """订单卡片 —— 每个字段独占一行，清晰明了（2026-10-24 应队长需求）。
+
+    旧版把「客户｜产品」「单价｜交期｜状态」挤在一行用 ｜ 分隔，移动端窄屏
+    会折行错位。现拆成每项一行：客户 / 产品 / 数量 / 单价 / 交期 / 状态 / 依据。
+    """
     tag = "已登记新订单" if is_new else "已更新订单"
     _note = batch_brief(order)
     lines = [
         f"✅ {tag} {order['order_id']}",
-        f"📦 客户：{order['customer']}｜产品：{order['product']} {order.get('spec','')} ×{order.get('qty','?')}",
-        f"💰 单价 {order.get('unit_price','待报价')} ｜ 📅 交期 {effective_delivery_date(order) or '待定'}"
-        + (f"（{_note}）" if _note else "")
-        + f" ｜ 状态：{order.get('status')}{_status_tail(order)}",
+        f"👤 客户：{order['customer']}",
+        f"📦 产品：{order['product']} {order.get('spec','')}",
+        f"📊 数量：×{order.get('qty','?')}",
+        f"💰 单价：{order.get('unit_price','待报价')}",
+        f"📅 交期：{effective_delivery_date(order) or '待定'}"
+        + (f"（{_note}）" if _note else ""),
+        f"📌 状态：{order.get('status')}{_status_tail(order)}",
     ]
     if tasks:
         t = "；".join(f"{x['content']}" + (f"（{x['owner']}）" if x.get('owner') else "（待认领）") for x in tasks)
@@ -102,7 +124,7 @@ def append_card_text(order: dict) -> str:
     """追加单卡片：必须一眼看得出「这是加在原单后面的新单，原单没被改」。
 
     与 card_text 的区别只在于标题行和 parent 标注，其余字段口径完全一致，
-    避免同一张台账出现两套话术。
+    避免同一张台账出现两套话术。每项独占一行（2026-10-24 应队长需求）。
     """
     pid = order.get("parent_order_id") or ""
     head = f"📥 已登记追加单 {order['order_id']}"
@@ -110,10 +132,13 @@ def append_card_text(order: dict) -> str:
     _note = batch_brief(order)
     lines = [
         head,
-        f"📦 客户：{order['customer']}｜产品：{order['product']} {order.get('spec','')} ×{order.get('qty','?')}",
-        f"💰 单价 {order.get('unit_price','待报价')} ｜ 📅 交期 {effective_delivery_date(order) or '待定'}"
-        + (f"（{_note}）" if _note else "")
-        + f" ｜ 状态：{order.get('status')}{_status_tail(order)}",
+        f"👤 客户：{order['customer']}",
+        f"📦 产品：{order['product']} {order.get('spec','')}",
+        f"📊 数量：×{order.get('qty','?')}",
+        f"💰 单价：{order.get('unit_price','待报价')}",
+        f"📅 交期：{effective_delivery_date(order) or '待定'}"
+        + (f"（{_note}）" if _note else ""),
+        f"📌 状态：{order.get('status')}{_status_tail(order)}",
     ]
     if order.get("source_excerpt"):
         lines.append(f"📎 依据：\"{order['source_excerpt']}\"")
@@ -121,13 +146,20 @@ def append_card_text(order: dict) -> str:
 
 
 def query_text(order: dict, suggestion: str = "") -> str:
+    """查询回复 —— 每项独占一行，与卡片口径一致（2026-10-24 应队长需求）。"""
     _note = batch_brief(order)
-    base = (f"{order['customer']}的{order['product']} {order.get('spec','')} ×{order.get('qty','?')}，"
-            f"当前状态{order.get('status')}{_status_tail(order)}，"
-            f"预计{effective_delivery_date(order) or '待定'}交付"
-            + (f"（{_note}）" if _note else "") + "。")
-    ev = f"📎 依据：\"{order.get('source_excerpt','')}\"。" if order.get("source_excerpt") else ""
-    return base + ev + (suggestion and f" {suggestion}")
+    lines = [
+        f"📦 产品：{order['customer']}的{order['product']} {order.get('spec','')}",
+        f"📊 数量：×{order.get('qty','?')}",
+        f"📌 状态：{order.get('status')}{_status_tail(order)}",
+        f"📅 交期：预计{effective_delivery_date(order) or '待定'}交付"
+        + (f"（{_note}）" if _note else ""),
+    ]
+    if order.get("source_excerpt"):
+        lines.append(f"📎 依据：\"{order['source_excerpt']}\"。")
+    if suggestion:
+        lines.append(suggestion)
+    return "\n".join(lines)
 
 
 def briefing_text(stats: dict) -> str:

@@ -1,0 +1,42 @@
+<Slide style={{ width: 1280, height: 720, background: '#0F172A', padding: '40px 72px', flexDirection: 'column' }}>
+  <Box style={{ height: 84, flexDirection: 'column', justifyContent: 'center' }}>
+    <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#F7F4EC' }}>谁在用：靠微信接单的中小制造企业</Text>
+    <Text style={{ fontSize: 16, color: '#94A3B8', marginTop: 6 }}>机械配件、电气、鞋服、泵阀、汽摩配 —— 温州本地典型行业；没有 ERP，或 ERP 里没有「沟通」这一环</Text>
+  </Box>
+  <Box style={{ flex: 1, flexDirection: 'row', gap: 20, justifyContent: 'center' }}>
+    <Box style={{ width: 366, height: 466, background: 'rgba(247,244,236,0.06)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 12, padding: 24, flexDirection: 'column', gap: 9 }}>
+      <Text style={{ fontSize: 32, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas' }}>01</Text>
+      <Text style={{ fontSize: 23, fontWeight: 'bold', color: '#F7F4EC' }}>业务员</Text>
+      <Text style={{ fontSize: 14, color: '#94A3B8', lineHeight: 1.65 }}>手上几十个微信客户群，接单、报价、催货全靠聊天记录；没有系统可查，只能靠记性，忙起来就漏。</Text>
+      <Box style={{ height: 1, background: 'rgba(247,244,236,0.12)', marginTop: 2 }} />
+      <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#06B6D4' }}>典型场景</Text>
+      <Text style={{ fontSize: 13, color: '#CBD5E1', lineHeight: 1.85 }}>· 群里接单、改数量、改交期<br />· 被追问「这单什么时候到」<br />· 说「再排一批」要追加<br />· 一天几十条，记不住谁改过</Text>
+      <Text style={{ fontSize: 13, color: '#06B6D4', marginTop: 2 }}>瓯单通 → 一句话自动落成台账一笔</Text>
+      <Text style={{ fontSize: 12, color: '#64748B', marginTop: 'auto', fontStyle: 'italic' }}>最怕：消息被刷走，漏掉一笔</Text>
+    </Box>
+    <Box style={{ width: 366, height: 466, background: 'rgba(247,244,236,0.06)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 12, padding: 24, flexDirection: 'column', gap: 9 }}>
+      <Text style={{ fontSize: 32, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas' }}>02</Text>
+      <Text style={{ fontSize: 23, fontWeight: 'bold', color: '#F7F4EC' }}>跟单员</Text>
+      <Text style={{ fontSize: 14, color: '#94A3B8', lineHeight: 1.65 }}>把订单落到排产和交付，盯进度、对账；最怕业务、生产、客户三边口径不一致，返工扯皮。</Text>
+      <Box style={{ height: 1, background: 'rgba(247,244,236,0.12)', marginTop: 2 }} />
+      <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#06B6D4' }}>典型场景</Text>
+      <Text style={{ fontSize: 13, color: '#CBD5E1', lineHeight: 1.85 }}>· 核对数量 / 单价 / 交期<br />· 跟踪分批交付与尾数<br />· 对账发现某笔没登记<br />· 客户改单后旧台账没更新</Text>
+      <Text style={{ fontSize: 13, color: '#06B6D4', marginTop: 2 }}>瓯单通 → 变更自动校验留痕，口径唯一</Text>
+      <Text style={{ fontSize: 12, color: '#64748B', marginTop: 'auto', fontStyle: 'italic' }}>最怕：台账和实际对不上</Text>
+    </Box>
+    <Box style={{ width: 366, height: 466, background: 'rgba(247,244,236,0.06)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 12, padding: 24, flexDirection: 'column', gap: 9 }}>
+      <Text style={{ fontSize: 32, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas' }}>03</Text>
+      <Text style={{ fontSize: 23, fontWeight: 'bold', color: '#F7F4EC' }}>老板娘 / 老板</Text>
+      <Text style={{ fontSize: 14, color: '#94A3B8', lineHeight: 1.65 }}>不在一线，但每天都要问：哪单快到期、哪笔还没回款、这周要交多少，问一句往往要等半天。</Text>
+      <Box style={{ height: 1, background: 'rgba(247,244,236,0.12)', marginTop: 2 }} />
+      <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#06B6D4' }}>典型场景</Text>
+      <Text style={{ fontSize: 13, color: '#CBD5E1', lineHeight: 1.85 }}>· 早上先问「今天有哪些要交」<br />· 盯临期与逾期，别等客户催<br />· 一句话要一份「今日简报」<br />· 想看某单的来龙去脉</Text>
+      <Text style={{ fontSize: 13, color: '#06B6D4', marginTop: 2 }}>瓯单通 → 一句话查单、一句话出简报</Text>
+      <Text style={{ fontSize: 12, color: '#64748B', marginTop: 'auto', fontStyle: 'italic' }}>最怕：问一句要等半天答复</Text>
+    </Box>
+  </Box>
+  <Box style={{ height: 36, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>瓯单通 · 企业智能体赛道 · 队伍 XO</Text>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>03 / 10</Text>
+  </Box>
+</Slide>

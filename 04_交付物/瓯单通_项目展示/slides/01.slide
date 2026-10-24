@@ -1,0 +1,15 @@
+<Slide style={{ width: 1280, height: 720, background: '#0F172A', padding: 0, position: 'relative', overflow: 'hidden' }}>
+  <Box style={{ position: 'absolute', top: 0, right: 0, width: 640, height: 720, background: 'linear-gradient(160deg, #3B82F6 0%, #06B6D4 100%)', opacity: 0.95, flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+    <Text style={{ fontSize: 120, fontWeight: 'bold', color: 'rgba(255,255,255,0.22)', lineHeight: 1 }}>2026</Text>
+    <Text style={{ fontSize: 24, color: 'rgba(255,255,255,0.55)', letterSpacing: 8, marginTop: 8 }}>企业智能体</Text>
+  </Box>
+  <Box style={{ position: 'absolute', top: 0, right: 640, width: 2, height: 720, background: 'rgba(247,244,236,0.10)' }} />
+  <Box style={{ position: 'relative', zIndex: 2, flexDirection: 'column', justifyContent: 'center', height: 720, paddingLeft: 84, paddingRight: 700 }}>
+    <Text style={{ fontSize: 15, color: '#06B6D4', letterSpacing: 5, fontWeight: 'bold' }}>INTERCITY HACK 2026 · AI＋企业智能体赛道</Text>
+    <Text style={{ fontSize: 88, fontWeight: 'bold', color: '#F7F4EC', lineHeight: 1.05, marginTop: 18 }}>瓯单通</Text>
+    <Text style={{ fontSize: 28, color: '#CBD5E1', marginTop: 12 }}>碎片化沟通中的订单与任务协同</Text>
+    <Box style={{ width: 64, height: 4, background: '#06B6D4', marginTop: 30, borderRadius: 2 }} />
+    <Text style={{ fontSize: 18, color: '#94A3B8', marginTop: 26, lineHeight: 1.75 }}>把微信群里的订单与任务，自动变成实时、可查询、可提醒的协同台账<br />不用上 ERP，也不改变老板用微信的习惯</Text>
+    <Text style={{ fontSize: 15, color: '#64748B', marginTop: 42 }}>队伍 XO ｜ 温州大学 ｜ 2026.10.24</Text>
+  </Box>
+</Slide>

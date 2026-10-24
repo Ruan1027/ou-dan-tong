@@ -1,0 +1,58 @@
+<Slide style={{ width: 1280, height: 720, background: '#0F172A', padding: '40px 72px', flexDirection: 'column' }}>
+  <Box style={{ height: 84, flexDirection: 'column', justifyContent: 'center' }}>
+    <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#F7F4EC' }}>核心功能：从一句群聊，到一张可查的台账</Text>
+    <Text style={{ fontSize: 16, color: '#94A3B8', marginTop: 6 }}>四步闭环，每一步都可现场验证；判定全部走本地规则，结果可解释</Text>
+  </Box>
+  <Box style={{ flexDirection: 'row', gap: 16, justifyContent: 'center', marginTop: 6 }}>
+    <Box style={{ width: 272, height: 396, background: 'rgba(247,244,236,0.06)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 12, padding: 22, flexDirection: 'column', gap: 10 }}>
+      <Text style={{ fontSize: 60, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas', lineHeight: 1 }}>01</Text>
+      <Text style={{ fontSize: 21, fontWeight: 'bold', color: '#F7F4EC' }}>群聊抽取</Text>
+      <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.7 }}>把「DZ47 加到 80 个」「下周三交」这类碎片消息，抽成结构化字段：客户、产品、数量、单价、交期、状态。模糊量词「一批」不猜数，如实标缺失。</Text>
+      <Text style={{ fontSize: 12, color: '#06B6D4', marginTop: 'auto' }}>群聊原文 → 结构化订单</Text>
+      <Text style={{ fontSize: 12, color: '#64748B' }}>解决：漏单、靠人脑记</Text>
+    </Box>
+    <Box style={{ width: 272, height: 396, background: 'rgba(247,244,236,0.06)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 12, padding: 22, flexDirection: 'column', gap: 10 }}>
+      <Text style={{ fontSize: 60, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas', lineHeight: 1 }}>02</Text>
+      <Text style={{ fontSize: 21, fontWeight: 'bold', color: '#F7F4EC' }}>冲突校验</Text>
+      <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.7 }}>改数量、改交期自动与台账比对；数值悬殊、日期倒挂当场拦下并提示，避免几个人各说各话、口径打架。</Text>
+      <Text style={{ fontSize: 12, color: '#06B6D4', marginTop: 'auto' }}>变更消息 → 通过 / 冲突提示</Text>
+      <Text style={{ fontSize: 12, color: '#64748B' }}>解决：错单、口径不一致</Text>
+    </Box>
+    <Box style={{ width: 272, height: 396, background: 'rgba(247,244,236,0.06)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 12, padding: 22, flexDirection: 'column', gap: 10 }}>
+      <Text style={{ fontSize: 60, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas', lineHeight: 1 }}>03</Text>
+      <Text style={{ fontSize: 21, fontWeight: 'bold', color: '#F7F4EC' }}>协同台账</Text>
+      <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.7 }}>在途单一处维护，支持分批交期、未交付量、6 态流转；每次改动静默留履历，谁在什么时候改了什么一清二楚。</Text>
+      <Text style={{ fontSize: 12, color: '#06B6D4', marginTop: 'auto' }}>确认订单 → 台账 + 变更履历</Text>
+      <Text style={{ fontSize: 12, color: '#64748B' }}>解决：查不到、对不上</Text>
+    </Box>
+    <Box style={{ width: 272, height: 396, background: 'rgba(247,244,236,0.06)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 12, padding: 22, flexDirection: 'column', gap: 10 }}>
+      <Text style={{ fontSize: 60, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas', lineHeight: 1 }}>04</Text>
+      <Text style={{ fontSize: 21, fontWeight: 'bold', color: '#F7F4EC' }}>查单 & 简报</Text>
+      <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.7 }}>一句话查「李姐那批 DZ47 到哪了」；一句话出「今日简报」（在途 / 临期 / 逾期 / 待跟进）。查询与简报走规则，不依赖大模型。</Text>
+      <Text style={{ fontSize: 12, color: '#06B6D4', marginTop: 'auto' }}>口语提问 → 答案 / 简报</Text>
+      <Text style={{ fontSize: 12, color: '#64748B' }}>解决：回复慢、决策靠猜</Text>
+    </Box>
+  </Box>
+  <Box style={{ height: 92, marginTop: 16, background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.28)', borderRadius: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', padding: '0 20px' }}>
+    <Box style={{ flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+      <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>LLM 只负责抽取</Text>
+      <Text style={{ fontSize: 12, color: '#94A3B8' }}>结构化字段，不做判断</Text>
+    </Box>
+    <Box style={{ flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+      <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>判定与话术走规则</Text>
+      <Text style={{ fontSize: 12, color: '#94A3B8' }}>可解释、可测试、不漂移</Text>
+    </Box>
+    <Box style={{ flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+      <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>零第三方依赖</Text>
+      <Text style={{ fontSize: 12, color: '#94A3B8' }}>Python 标准库即可运行</Text>
+    </Box>
+    <Box style={{ flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+      <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>五套测试把关</Text>
+      <Text style={{ fontSize: 12, color: '#94A3B8' }}>154 / 30 / 14 / 100 / 22</Text>
+    </Box>
+  </Box>
+  <Box style={{ height: 36, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>瓯单通 · 企业智能体赛道 · 队伍 XO</Text>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>04 / 10</Text>
+  </Box>
+</Slide>

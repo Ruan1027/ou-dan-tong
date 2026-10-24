@@ -17,5 +17,11 @@ Thumbs.db
 # 本地临时产物目录
 output/
 
+# 本地运行日志（web_app / 测试产生的临时输出，不入库）
+*.log
+
+# slidep（PPT 生成工具）内部工作文件
+.slidep/
+
 # 密钥 / 凭证：本地配置，含 API Key，绝不入库
 .env

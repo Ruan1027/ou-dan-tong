@@ -1,0 +1,53 @@
+<Slide style={{ width: 1280, height: 720, background: '#0F172A', padding: '40px 72px', flexDirection: 'column' }}>
+  <Box style={{ height: 84, flexDirection: 'column', justifyContent: 'center' }}>
+    <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#F7F4EC' }}>团队分工 · AI 工具栈 · 第三方资源</Text>
+    <Text style={{ fontSize: 16, color: '#94A3B8', marginTop: 6 }}>4 人小队，按模块分工；工具与资源如实标注，便于组委会核验</Text>
+  </Box>
+  <Box style={{ flex: 1, flexDirection: 'row', gap: 30 }}>
+    <Box style={{ flex: 1, flexDirection: 'column', gap: 10, justifyContent: 'space-between' }}>
+      <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#06B6D4' }}>团队成员分工（4 人）</Text>
+      <Box style={{ background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 16px', flexDirection: 'column', gap: 3 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>队长 · 小羊</Text>
+        <Text style={{ fontSize: 13, color: '#94A3B8' }}>总体架构、智能体编排（agent.py）、交付打包与联调</Text>
+      </Box>
+      <Box style={{ background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 16px', flexDirection: 'column', gap: 3 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>队友 B</Text>
+        <Text style={{ fontSize: 13, color: '#94A3B8' }}>模块五：卡片交互与话术、五套测试、缺陷台账</Text>
+      </Box>
+      <Box style={{ background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 16px', flexDirection: 'column', gap: 3 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>队友 C</Text>
+        <Text style={{ fontSize: 13, color: '#94A3B8' }}>模块六：网页端（沟通页 / 台账 / 四维筛选）</Text>
+      </Box>
+      <Box style={{ background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 16px', flexDirection: 'column', gap: 3 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>队友 D</Text>
+        <Text style={{ fontSize: 13, color: '#94A3B8' }}>模块三：台账与状态机、契约口径（contracts）</Text>
+      </Box>
+      <Box style={{ background: 'rgba(6,182,212,0.08)', borderRadius: 8, padding: '12px 16px', marginTop: 'auto' }}>
+        <Text style={{ fontSize: 12, color: '#94A3B8', lineHeight: 1.6 }}>协作方式：每人独立分支 + Pull Request，合并前互审；AI 辅助编码，人工审核与测试把关。</Text>
+      </Box>
+    </Box>
+    <Box style={{ flex: 1, flexDirection: 'column', gap: 12 }}>
+      <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#06B6D4' }}>AI 工具栈与技术来源</Text>
+      <Box style={{ background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 16px', flexDirection: 'column', gap: 5 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>AI 工具栈</Text>
+        <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.7 }}>DeepSeek-V4.1-Flash（硅基流动，OpenAI 兼容端点）· WorkBuddy（AI 开发环境）· GitHub（版本与协作）</Text>
+      </Box>
+      <Box style={{ background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 16px', flexDirection: 'column', gap: 5 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>第三方资源</Text>
+        <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.7 }}>仅使用 Python 标准库，无第三方依赖；演示数据全部自造（模拟），不含真实企业数据与外部素材。</Text>
+      </Box>
+      <Box style={{ background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 16px', flexDirection: 'column', gap: 5 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>AI 使用边界</Text>
+        <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.7 }}>LLM 仅用于「把群聊抽成结构化字段」；缺失 / 冲突判定、状态流转、话术模板全部为本地规则，可复现、可回归。</Text>
+      </Box>
+      <Box style={{ background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 16px', flexDirection: 'column', gap: 5, marginTop: 'auto' }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>开发记录</Text>
+        <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.7 }}>GitHub 仓库保留完整提交与 PR 记录（#1–#38）；含模块说明、测试报告与缺陷台账，可随时核验。</Text>
+      </Box>
+    </Box>
+  </Box>
+  <Box style={{ height: 36, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>瓯单通 · 企业智能体赛道 · 队伍 XO</Text>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>08 / 10</Text>
+  </Box>
+</Slide>

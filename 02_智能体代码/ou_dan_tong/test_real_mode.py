@@ -233,7 +233,8 @@ web_app._llm = DeadLLM()
 _SCENARIOS = [
     ("new", "老周，秋季那款运动鞋鞋底 EVA 发泡的，先给我 800 双，最好 11 月 10 号前到",
      "阿珍", "✅ 已登记新订单"),
-    ("update", "小陈，DZ47 那个加到 80 个", "李姐", "✅ 已更新订单"),
+    # 2026-10-24 起关键字段变更先确认再更改：降级链路同样出「变更待确认」卡片
+    ("update", "小陈，DZ47 那个加到 80 个", "李姐", "🟡 变更待确认"),
     ("missing", "小陈，法兰那批的货再帮我排上一批，我这边急", "王总", "🟡"),
     ("conflict", "小陈，法兰 DN80 那单单价你按 18 算，上次说好的", "王总", "⚠️ 冲突待确认"),
     ("abnormal", "小陈，DZ47 那个数量给我改成 -300", "李姐", "⛔ 异常拦截"),
@@ -257,6 +258,21 @@ for name, text, sender, mark in _SCENARIOS:
     if name == "new":
         ok(after == before + 1, f"T3 {name}：新建确实入库（{before}→{after}）",
            f"{before}→{after}")
+
+# T3 补充：update 场景「先确认再更改」全流程 —— 挂起不落库 → 回「是」→ 落库
+web_app._store.reset()
+handle_message("__seed__", web_app._store, llm=None, mock=WEB_DEMO_SEED)
+r_u1 = web_app.do_chat("小陈，DZ47 那个加到 80 个", scenario="update", sender="李姐")
+ok("变更待确认" in r_u1.get("reply", ""),
+   "T3 update①：降级后先出「变更待确认」卡片", r_u1.get("reply", "")[:60])
+_dz = next((o for o in web_app._store.orders if "DZ47" in str(o.get("product"))), None)
+ok(_dz is not None and _dz.get("qty") == 50,
+   "T3 update①：确认前台账仍是 50（未落库）", _dz and _dz.get("qty"))
+r_u2 = web_app.do_chat("是", sender="李姐")
+ok("已按您的要求完成修改" in r_u2.get("reply", ""),
+   "T3 update②：回「是」后回发更新后的订单信息", r_u2.get("reply", "")[:60])
+ok(_dz is not None and _dz.get("qty") == 80,
+   "T3 update②：确认后台账落库为 80", _dz and _dz.get("qty"))
 
 # 无 scenario 的裸消息：也要给出可执行的引导，而不是抛错
 web_app._store.reset()
@@ -411,8 +427,16 @@ print("\n[T7] 多轮 sender 一致性：两轮不同发言人，各自落到自�
 _s7 = fresh_store()
 _n7 = len(_s7.orders)
 _llm7 = ContentAwareLLM()
-handle_message("小陈，DZ47 那个加到 80 个", _s7, llm=_llm7, sender="李姐")
-handle_message("小陈，法兰那批加到 400 个", _s7, llm=_llm7, sender="王总")
+# 2026-10-24 起关键字段（数量/单价/交期）变更走「先确认再更改」：
+# 变更消息挂起 → 客户回「是」才落库。T7 每轮变更后补一轮确认。
+_r7a = handle_message("小陈，DZ47 那个加到 80 个", _s7, llm=_llm7, sender="李姐")
+ok("变更待确认" in _r7a.get("reply", ""),
+   "T7 第1轮：关键字段变更先出「变更待确认」卡片（不直接落库）", _r7a.get("reply", "")[:60])
+handle_message("是", _s7, sender="李姐")          # 确认第 1 轮（DZ47 → 80）
+_r7b = handle_message("小陈，法兰那批加到 400 个", _s7, llm=_llm7, sender="王总")
+ok("变更待确认" in _r7b.get("reply", ""),
+   "T7 第2轮：关键字段变更先出「变更待确认」卡片（不直接落库）", _r7b.get("reply", "")[:60])
+handle_message("是", _s7, sender="王总")          # 确认第 2 轮（法兰 → 400）
 
 ok(_llm7.calls[-1]["user"].startswith("[发送者:王总] "),
    "T7 第2轮 prompt 的 sender 是王总（不带上一轮的李姐）",
@@ -472,16 +496,25 @@ _th8 = threading.Thread(target=_srv8.serve_forever, daemon=True)
 _th8.start()
 try:
     # ① 带 sender：HTTP 层正确透传 → 正常落单到客户名下
+    # 2026-10-24 起关键字段变更走「先确认再更改」：第一条消息挂起出待确认卡片，
+    # 再 POST「是」确认后才落库。
     _reseed()
     r = _post_json(_p8, "/api/chat",
                    {"message": "小陈，DZ47 那个加到 80 个", "sender": "李姐"})
     _reply = r.get("reply", "")
     ok(isinstance(r, dict) and "reply" in r, "T8 ①响应是合法 JSON 且含 reply 字段", str(type(r)))
-    ok("✅" in _reply and ("已更新订单" in _reply or "已登记新订单" in _reply),
-       "T8 ①带 sender：HTTP 透传后正常出「✅ 已更新/已登记」", _reply[:70])
+    ok("变更待确认" in _reply and "50 → 80" in _reply,
+       "T8 ①带 sender：HTTP 透传后先出「变更待确认」卡片（含拟改动 50 → 80）", _reply[:70])
+    _pre = next((o for o in web_app._store.orders
+                 if "李姐" in str(o.get("customer"))), None)
+    ok(_pre is not None and _pre.get("qty") == 50,
+       "T8 ①带 sender：确认前台账仍是 50（挂起未落库）", _pre and _pre.get("qty"))
+    r2 = _post_json(_p8, "/api/chat", {"message": "是", "sender": "李姐"})
+    ok("已按您的要求完成修改" in r2.get("reply", ""),
+       "T8 ①确认：回「是」后回发更新后的订单信息", r2.get("reply", "")[:60])
     _hit = next((o for o in web_app._store.orders
                  if "李姐" in str(o.get("customer")) and o.get("qty") == 80), None)
-    ok(_hit is not None, "T8 ①带 sender：李姐那单经 HTTP 已更新为 80",
+    ok(_hit is not None, "T8 ①带 sender：确认后李姐那单经 HTTP 已更新为 80",
        str([(o.get("customer"), o.get("qty")) for o in web_app._store.orders]))
 
     # ② 不带 sender：HTTP 层就缺 sender → 占位单路径（线上故障的复现面）

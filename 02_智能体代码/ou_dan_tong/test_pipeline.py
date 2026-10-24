@@ -534,6 +534,104 @@ def test_pipeline():
     _r20 = next((o for o in s20.orders if o["order_id"] == _oid20), None)
     ck.ok(_r20 is not None and _r20["qty"] == 80, "T20 无变化后台账数量应保持 80", _r20 and _r20["qty"])
 
+    # ---------------- T21 关键字段变更「先确认再更改」（2026-10-24 应队长需求） ----------------
+    # 修改数量/单价/交期这类关键字段时：先把订单当前信息+拟改动发给客户确认，
+    # 回「是」才落库，回「否」取消。状态/规格/样品等低风险字段仍直接落库。
+    # 仅带 session_key 的多轮会话生效；无 session_key 的 parse_chat 保持直接落库。
+    ck.section("T21 关键字段变更：先确认再更改")
+    _SK21 = "t21_pending_"
+
+    def _mk21():
+        _s = Store(); _s.reset()
+        parse_chat("x", _s, mock=[_order(customer="李姐（瓯越五金贸易）",
+                                         product="DZ47-63 三相断路器", qty=50,
+                                         unit_price="26", delivery_date="2026-10-27",
+                                         status_hint="已确认",
+                                         source_excerpt="李姐 DZ47 50个")], now=NOW)
+        return _s
+
+    _UPD21 = [_order(customer="李姐（瓯越五金贸易）", product="DZ47-63 三相断路器",
+                     qty=80, unit_price=None, delivery_date=None, status_hint=None,
+                     intent="update", source_excerpt="小陈，DZ47 那个加到 80 个")]
+
+    # ① 关键字段变更 → 挂起：出待确认卡片，台账不落库
+    s21 = _mk21()
+    _r21a = handle_message("小陈，DZ47 那个加到 80 个", s21, mock=_UPD21,
+                           sender="李姐", session_key=_SK21 + "a")
+    _rep21a = _r21a.get("reply", "")
+    ck.ok("变更待确认" in _rep21a, "T21 ① 关键字段变更应先出「变更待确认」卡片", _rep21a[:60])
+    ck.ok("── 订单当前信息 ──" in _rep21a and "📊 数量：×50" in _rep21a,
+          "T21 ① 卡片应先展示订单当前信息（含现值 50）", _rep21a[:200])
+    ck.ok("50 → 80" in _rep21a, "T21 ① 卡片应列出拟改动「数量：50 → 80」", _rep21a[:300])
+    ck.ok("请回复 是/否" in _rep21a, "T21 ① 卡片底部应请客户回复 是/否", _rep21a[-60:])
+    _o21a = next((o for o in s21.orders if "DZ47" in str(o.get("product"))), None)
+    ck.ok(_o21a is not None and _o21a["qty"] == 50,
+          "T21 ① 确认前台账不落库（仍为 50）", _o21a and _o21a["qty"])
+
+    # ② 回「是」→ 应用修改并回发更新后订单信息
+    _r21b = handle_message("是", s21, session_key=_SK21 + "a")
+    ck.ok(_r21b["mode"] == "update_confirm", "T21 ② 回「是」应 mode=update_confirm", _r21b.get("mode"))
+    ck.ok("已按您的要求完成修改" in _r21b.get("reply", ""),
+          "T21 ② 应回发更新后的订单信息", _r21b.get("reply", "")[:60])
+    ck.ok("📊 数量：×80" in _r21b.get("reply", ""),
+          "T21 ② 回发的订单信息应含新数量 80", _r21b.get("reply", "")[:300])
+    ck.ok(_o21a["qty"] == 80, "T21 ② 确认后台账落库为 80", _o21a["qty"])
+    ck.ok(len(_o21a.get("changes", [])) >= 1, "T21 ② 确认后变更留痕已记录",
+          len(_o21a.get("changes", [])))
+
+    # ③ 回「否」→ 取消，台账保持原样
+    s21c = _mk21()
+    handle_message("小陈，DZ47 那个加到 80 个", s21c, mock=_UPD21,
+                   sender="李姐", session_key=_SK21 + "c")
+    _r21c = handle_message("否", s21c, session_key=_SK21 + "c")
+    ck.ok(_r21c["mode"] == "update_cancel", "T21 ③ 回「否」应 mode=update_cancel", _r21c.get("mode"))
+    ck.ok("已取消本次修改" in _r21c.get("reply", ""),
+          "T21 ③ 应告知已取消且台账保持原样", _r21c.get("reply", ""))
+    _o21c = next((o for o in s21c.orders if "DZ47" in str(o.get("product"))), None)
+    ck.ok(_o21c is not None and _o21c["qty"] == 50,
+          "T21 ③ 取消后台账保持 50", _o21c and _o21c["qty"])
+
+    # ④ 非关键字段（状态）变更 → 直接落库不挂起
+    s21d = _mk21()
+    _r21d = handle_message("李姐那单 DZ47 状态改成已发货", s21d,
+                           mock=[_order(customer="李姐（瓯越五金贸易）",
+                                        product="DZ47-63 三相断路器", qty=None,
+                                        unit_price=None, delivery_date=None,
+                                        status_hint="已发货", intent="update",
+                                        source_excerpt="状态改成已发货")],
+                           sender="李姐", session_key=_SK21 + "d")
+    _o21d = next((o for o in s21d.orders if "DZ47" in str(o.get("product"))), None)
+    ck.ok("变更待确认" not in _r21d.get("reply", ""),
+          "T21 ④ 状态变更（非关键字段）不应挂起", _r21d.get("reply", "")[:60])
+    ck.ok(_o21d is not None and _o21d["status"] != "已确认",
+          "T21 ④ 状态变更应直接落库", _o21d and _o21d["status"])
+
+    # ⑤ 无 session_key 的 parse_chat 保持直接落库（批处理/测试兼容）
+    s21e = _mk21()
+    parse_chat("x", s21e, mock=_UPD21, now=NOW)
+    _o21e = next((o for o in s21e.orders if "DZ47" in str(o.get("product"))), None)
+    ck.ok(_o21e is not None and _o21e["qty"] == 80,
+          "T21 ⑤ 无 session_key 的 parse_chat 保持直接落库（向后兼容）",
+          _o21e and _o21e["qty"])
+
+    # ⑥ 待确认期间发来新变更指令 → 旧挂起被新指令取代
+    s21f = _mk21()
+    handle_message("小陈，DZ47 那个加到 80 个", s21f, mock=_UPD21,
+                   sender="李姐", session_key=_SK21 + "f")
+    _r21f = handle_message("小陈，DZ47 那个加到 100 个", s21f,
+                           mock=[_order(customer="李姐（瓯越五金贸易）",
+                                        product="DZ47-63 三相断路器", qty=100,
+                                        unit_price=None, delivery_date=None,
+                                        status_hint=None, intent="update",
+                                        source_excerpt="加到 100 个")],
+                           sender="李姐", session_key=_SK21 + "f")
+    ck.ok("50 → 100" in _r21f.get("reply", ""),
+          "T21 ⑥ 新变更指令应取代旧挂起（拟改动变为 50 → 100）", _r21f.get("reply", "")[:200])
+    handle_message("是", s21f, session_key=_SK21 + "f")
+    _o21f = next((o for o in s21f.orders if "DZ47" in str(o.get("product"))), None)
+    ck.ok(_o21f is not None and _o21f["qty"] == 100,
+          "T21 ⑥ 确认后落库的应是新指令的 100（非旧挂起的 80）", _o21f and _o21f["qty"])
+
     ck.report()
     print("-" * 46)
     print(briefing(store))

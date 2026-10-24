@@ -707,11 +707,21 @@ def briefing(store: Store, llm: LLM = None):
             most_urgent = f"{pending[0]['customer']} 待定交期"
     else:
         most_urgent = "无"
+
+    def _pending_desc(o):
+        # 简报要完整呈现每一笔沟通中的单，不能只给"最急"一条（演示版 2026-10-24）
+        d = _days_to(o.get("delivery_date"))
+        if d is None:
+            return f"{o['customer']} 待定交期"
+        tag = "已逾期" if d < 0 else f"还有 {d} 天"
+        return f"{o['customer']} {tag}（交期 {o.get('delivery_date')}）"
+
     stats = {
         "date": today,
         "new": len(new_orders),
         "new_customers": "、".join(sorted({o["customer"] for o in new_orders})) or "无",
         "pending_quote": len(pending),
+        "pending_list": "、".join(_pending_desc(o) for o in pending) or "无",
         "most_urgent": most_urgent,
         "due_soon": len(due),
         "due_list": "、".join(f"{o['customer']}({dd})" for o, dd in due_pairs) or "无",

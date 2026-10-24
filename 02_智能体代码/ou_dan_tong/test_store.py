@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from store import (Store, normalize_status, can_transition, next_statuses,
                    PLACEHOLDER_STATUS, effective_delivery_date, _valid_batches,
-                   _invalid_batches)
+                   _invalid_batches, missing_info_tags)
 
 
 def _tmp_store():
@@ -157,15 +157,20 @@ def test_state_machine():
     assert normalize_status("待确认") == "已确认"
     assert normalize_status("已发货") == "已交付"
     assert normalize_status("乱写") is None
-    # 「已报价」已废弃：别名归一为「沟通中」（2026-10-23 产品口径）
+    # 业务口径 2026-10-24：取消「已报价」，自动归一化为「沟通中」
     assert normalize_status("已报价") == "沟通中"
+    assert can_transition("沟通中", "已确认") is True
     assert can_transition("已确认", "沟通中") is False
     assert can_transition(PLACEHOLDER_STATUS, "已确认") is True
+    # next_statuses 视图不再出现「已报价」
+    assert next_statuses("沟通中") == ["已确认", "生产中", "部分交付", "已交付", "已取消"], \
+        next_statuses("沟通中")
     assert next_statuses("已确认") == ["生产中", "部分交付", "已交付", "已取消"], next_statuses("已确认")
 
     s, d = _tmp_store()
     try:
         s.add_order({**_order(), "order_id": "ORD-1", "status": "沟通中"})
+        # 新口径：不再有「已报价」，沟通中直接推进到已确认
         chain = ["已确认", "生产中", "已交付"]
         for st in chain:
             r = s.set_order_status("ORD-1", st, speaker="李经理", raw=f"进度：{st}")
@@ -310,12 +315,45 @@ def test_integrity_batches():
         shutil.rmtree(d, ignore_errors=True)
 
 
+# —— 业务口径 2026-10-24：取消已报价，沟通中细分 未定数/未定期/未定价 ——
+def test_info_missing():
+    s, d = _tmp_store()
+    try:
+        # 三项齐全 → 无缺失标签（对应「已确认」的前提）
+        full = {**_order(), "order_id": "ORD-M1"}
+        assert missing_info_tags(full) == [], missing_info_tags(full)
+        # 缺数量 → 未定数；缺交期 → 未定期；单价「待报价」/缺失 → 未定价
+        assert missing_info_tags({**_order(qty=None)}) == ["未定数"]
+        assert missing_info_tags({**_order(qty=0)}) == ["未定数"], "0 个不是有效报数"
+        assert missing_info_tags({**_order(delivery_date=None)}) == ["未定期"]
+        assert missing_info_tags({**_order(unit_price="待报价")}) == ["未定价"]
+        assert missing_info_tags({**_order(unit_price=None)}) == ["未定价"]
+        # 组合缺失：数和期都没定 → 两个标签并存（这是不做独立状态的原因）
+        assert missing_info_tags({**_order(qty=None, delivery_date=None)}) == \
+            ["未定数", "未定期"]
+
+        # 存量「已报价」单读入自动归一化为「沟通中」，不再有新的已报价
+        s.add_order({**_order(), "order_id": "ORD-M2", "status": "已报价"})
+        assert s.get_order("ORD-M2")["status"] == "沟通中", s.get_order("ORD-M2")["status"]
+        # 沟通中 → 已确认 正常推进（跳级允许）
+        assert s.set_order_status("ORD-M2", "已确认")["ok"] is True
+
+        # 守卫：已确认单仍缺项 → warn 提示（不拦截，交由人工核实）
+        s.orders = [{**_order(qty=None), "order_id": "ORD-M3", "status": "已确认"}]
+        msgs = [i["issue"] for i in s.integrity_check() if i["id"] == "ORD-M3"]
+        assert any("已确认" in m and "未定数" in m for m in msgs), msgs
+        print("✓ 业务口径 2026-10-24：已报价归一化沟通中、未定数/未定期/未定价细分、已确认三项齐全守卫")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_model()
     test_latest_state()
     test_persistence()
     test_integrity()
     test_state_machine()
+    test_info_missing()
     test_batch_delivery()
     test_integrity_batches()
     print("-" * 46)

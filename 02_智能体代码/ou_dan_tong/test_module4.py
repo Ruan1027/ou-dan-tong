@@ -153,7 +153,7 @@ def test_module4():
     ans = query("客户A 生产中的单", store)
     assert "🏭" in ans and "生产中" in ans, f"状态高亮缺失: {ans}"
     # 场景19：高亮 —— 数量有 📦 标记
-    assert "📦 ×100" in ans, f"数量高亮缺失: {ans}"
+    assert "📊 数量：×100" in ans, f"数量高亮缺失: {ans}"
     # 场景20：高亮 —— 交期有 📅 标记（客户A 有交期 2026-11-20）
     assert "📅" in ans and "2026-11-20" in ans, f"交期高亮缺失: {ans}"
 
@@ -1062,7 +1062,7 @@ def smoke():
 
     # ⑦ 高亮（状态/数量/交期 emoji）
     ans = query("客户A 生产中的单", store)
-    assert "🏭" in ans and "📦 ×100" in ans and "📅" in ans, f"高亮缺失: {ans}"
+    assert "🏭" in ans and "📊 数量：×100" in ans and "📅" in ans, f"高亮缺失: {ans}"
 
     # ⑧ 历史追溯（变更前后值）
     store.reset()

@@ -94,6 +94,21 @@ def _status_tail(order: dict) -> str:
     return ("（" + "、".join(dims) + "）") if dims else ""
 
 
+# 状态 emoji（与 agent._status_emoji 口径一致）：卡片 / 查询 / 字段块统一在状态值前加
+# 高亮标记，避免「查询有 emoji、卡片没有」的不一致（2026-10-24 基线修复）。
+_STATUS_EMOJI = {
+    "沟通中": "💬", "已确认": "✅", "生产中": "🏭",
+    "已交付": "🚚", "部分交付": "📦", "已取消": "🚫",
+}
+
+
+def _status_badge(status) -> str:
+    """状态值前加 emoji 高亮；未收录的状态（含 None/待补充）原样返回，不加标记。"""
+    s = status or ""
+    e = _STATUS_EMOJI.get(s)
+    return f"{e} {s}" if e else s
+
+
 def card_text(order: dict, tasks: list, is_new: bool) -> str:
     """订单卡片 —— 每个字段独占一行，清晰明了（2026-10-24 应队长需求）。
 
@@ -110,7 +125,7 @@ def card_text(order: dict, tasks: list, is_new: bool) -> str:
         f"💰 单价：{order.get('unit_price','待报价')}",
         f"📅 交期：{effective_delivery_date(order) or '待定'}"
         + (f"（{_note}）" if _note else ""),
-        f"📌 状态：{order.get('status')}{_status_tail(order)}",
+        f"📌 状态：{_status_badge(order.get('status'))}{_status_tail(order)}",
     ]
     if tasks:
         t = "；".join(f"{x['content']}" + (f"（{x['owner']}）" if x.get('owner') else "（待认领）") for x in tasks)
@@ -138,7 +153,7 @@ def append_card_text(order: dict) -> str:
         f"💰 单价：{order.get('unit_price','待报价')}",
         f"📅 交期：{effective_delivery_date(order) or '待定'}"
         + (f"（{_note}）" if _note else ""),
-        f"📌 状态：{order.get('status')}{_status_tail(order)}",
+        f"📌 状态：{_status_badge(order.get('status'))}{_status_tail(order)}",
     ]
     if order.get("source_excerpt"):
         lines.append(f"📎 依据：\"{order['source_excerpt']}\"")
@@ -151,7 +166,7 @@ def query_text(order: dict, suggestion: str = "") -> str:
     lines = [
         f"📦 产品：{order['customer']}的{order['product']} {order.get('spec','')}",
         f"📊 数量：×{order.get('qty','?')}",
-        f"📌 状态：{order.get('status')}{_status_tail(order)}",
+        f"📌 状态：{_status_badge(order.get('status'))}{_status_tail(order)}",
         f"📅 交期：预计{effective_delivery_date(order) or '待定'}交付"
         + (f"（{_note}）" if _note else ""),
     ]
@@ -180,7 +195,7 @@ def _order_fields_block(order: dict) -> list:
         f"💰 单价：{_val('unit_price')}",
         f"📊 数量：×{_val('qty')}",
         f"📅 交期：{effective_delivery_date(order) or '待补充'}",
-        f"📌 状态：{order.get('status','待补充')}{_status_tail(order)}",
+        f"📌 状态：{_status_badge(order.get('status','待补充'))}{_status_tail(order)}",
     ]
 
 

@@ -64,12 +64,16 @@
   .cbtn { border:1px solid #cbd5e1; background:#fff; color:#0f172a; border-radius:10px;
           padding:8px 12px; font-size:13px; font-weight:600; cursor:pointer; }
   .cbtn:hover { background:#f1f5f9; }
-  .wx-input { display:flex; gap:8px; padding:10px 14px; background:#f7f7f7; border-top:1px solid #e0e0e0; }
+  /* align-items:flex-end：输入框随内容增高时，发言人框与发送按钮贴底不被拉伸 */
+  .wx-input { display:flex; align-items:flex-end; gap:8px; padding:10px 14px;
+              background:#f7f7f7; border-top:1px solid #e0e0e0; }
   /* 发言人输入框：平台直接面向顾客，发信人即客户本人，必须随消息一起传下去 */
   .wx-input .wx-sender { width:80px; flex:0 0 auto; height:42px; border:1px solid var(--line);
                          border-radius:10px; padding:0 10px; font-size:13px; font-family:inherit;
                          text-align:center; color:var(--brand2); font-weight:600; }
-  .wx-input textarea { flex:1; resize:none; height:42px; border:1px solid var(--line); border-radius:10px;
+  /* min/max-height + overflow：配合 autoGrow() 支持 Shift+Enter 多行，超过 120px 内部滚动 */
+  .wx-input textarea { flex:1; resize:none; min-height:42px; max-height:120px; overflow-y:auto;
+                       line-height:1.45; border:1px solid var(--line); border-radius:10px;
                        padding:9px 12px; font-size:14px; font-family:inherit; }
   .wx-input button { border:none; border-radius:10px; padding:0 18px; font-weight:600; cursor:pointer;
                      background:var(--brand); color:#fff; flex:0 0 auto; }
@@ -469,8 +473,55 @@ function wxSendInput(){
   const s = (sEl && sEl.value.trim()) || "客户";
   wxSend(t, null, s);
   i.value = "";
+  autoGrow(i);   /* value="" 不触发 input 事件，必须显式复位高度，否则发完一直是高位 */
+  i.focus();     /* 发送后光标回到输入框，可直接接着输入 */
 }
 async function wxSendScenario(s){ await wxSend(s.text, s.scenario, s.sender); }
+
+/* ---------- 键盘交互：Enter 发送 / Shift+Enter 换行 ----------
+   keyAction 是纯函数（无副作用、不碰 DOM），便于脱离浏览器做表驱动测试：
+   输入法判定最容易「看着对、实际错」，能被单测钉住才可靠。
+   返回 "send" | "newline" | "ignore"。
+   组合输入态返回 "ignore"：此时 Enter 是「上屏选词」，必须原样交还输入法。 */
+function keyAction(e, composing){
+  if(!e || e.key !== "Enter") return "ignore";
+  if(composing || e.isComposing || e.keyCode === 229) return "ignore";
+  if(e.shiftKey) return "newline";
+  return "send";
+}
+
+/* 把 Enter 绑定到发送。三重 IME 判定缺一不可：
+     · e.isComposing  标准字段，Chrome/Firefox 组合态为 true
+     · keyCode === 229 旧版 Chromium / 部分输入法在组合态给 229
+     · composing 闭包标志  兜 Safari——它在「上屏那一次」的 keydown 里
+       isComposing 可能已是 false，且 compositionend 可能早于 keydown，
+       故在 compositionend 里用 setTimeout(0) 延迟清除，保证同一任务内的
+       keydown 仍读到 true。
+   guard 返回 false 时不发送（查询框请求进行中防重复触发）。
+   Shift+Enter 一律不 preventDefault，把换行留给浏览器默认行为。 */
+function bindEnterToSend(node, onSend, guard){
+  if(!node) return;
+  let composing = false;
+  node.addEventListener("compositionstart", function(){ composing = true; });
+  node.addEventListener("compositionend", function(){
+    setTimeout(function(){ composing = false; }, 0);
+  });
+  node.addEventListener("keydown", function(e){
+    const act = keyAction(e, composing);
+    if(act !== "send") return;          /* newline / ignore 一律不拦截 */
+    e.preventDefault();                  /* 阻止 Enter 插入换行 */
+    if(guard && !guard()) return;
+    onSend();
+  });
+}
+
+/* 多行自动增高：先把 height 归零再按 scrollHeight 撑开。
+   上限 120px 与 CSS max-height 一致，超过后由 overflow-y 滚动。 */
+function autoGrow(node){
+  if(!node) return;
+  node.style.height = "auto";
+  node.style.height = Math.min(node.scrollHeight, 120) + "px";
+}
 
 /* ---------- 台账渲染 ---------- */
 /* 变更履历（changes[] / change_log）在台账里以「子单」形式展开：
@@ -800,6 +851,21 @@ async function init(){
   await refreshPlatform();   /* 失败已在内部提示，不阻断欢迎语 */
   addWx("agent","我是瓯单通，已接入本群。客户在微信里发的订单消息，我会自动提取成台账。\n点下方按钮，模拟客户发来 5 类消息 👇","hint");
 }
+/* Enter 发送 / Shift+Enter 换行。绑定放顶层而非 init() 内：
+   init() 是 async 且首行就 await refreshPlatform()，一旦抛错，末尾的绑定会静默丢失。 */
+(function bindKeyboard(){
+  const wi = el("wxInput");
+  bindEnterToSend(wi, wxSendInput);
+  if(wi) wi.addEventListener("input", function(){ autoGrow(wi); });
+
+  /* 查询框单行无换行语义，Enter / Shift+Enter 都触发查询。
+     请求进行中按钮是 disabled，此时再按 Enter 不应重复发起。 */
+  bindEnterToSend(el("qInput"), doQuery, function(){
+    const b = document.querySelector(".query-box button");
+    return !(b && b.disabled);
+  });
+})();
+
 init();
 </script>
 </body>

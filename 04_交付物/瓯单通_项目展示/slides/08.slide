@@ -7,7 +7,7 @@
     <Box style={{ flex: 1, flexDirection: 'column', gap: 10, justifyContent: 'space-between' }}>
       <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#06B6D4' }}>团队成员分工（4 人）</Text>
       <Box style={{ background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 16px', flexDirection: 'column', gap: 3 }}>
-        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>队长 · 小羊</Text>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>队长 · A</Text>
         <Text style={{ fontSize: 13, color: '#94A3B8' }}>总体架构、智能体编排（agent.py）、交付打包与联调</Text>
       </Box>
       <Box style={{ background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 16px', flexDirection: 'column', gap: 3 }}>

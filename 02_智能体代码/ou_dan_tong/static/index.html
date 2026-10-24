@@ -134,6 +134,79 @@
   .p-brief { flex:1 1 auto; }
   .p-brief .brief-btn { flex:0 0 auto; margin-bottom:8px; }
 
+  /* ===== 订单台账 · 筛选器（视觉参照 macOS 排序菜单）=====
+     注意：`.panel` 是 overflow:hidden，下拉若作为面板子元素会被直接裁掉，
+     所以菜单用 position:fixed 挂在 body 上，按按钮的 getBoundingClientRect() 定位。 */
+  .panel-tools { margin-left:auto; align-self:center; display:flex; align-items:center; gap:6px; flex:0 0 auto; }
+  .flt-btn { display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 9px;
+             border:1px solid var(--line); background:#f7f7f7; color:#334155; border-radius:9px;
+             font-size:12.5px; font-family:inherit; font-weight:600; cursor:pointer; white-space:nowrap; }
+  .flt-btn:hover { background:#f1f5f9; }
+  .flt-btn[aria-expanded="true"] { background:#eef2ff; border-color:#c7d2fe; color:var(--brand); }
+  .flt-btn .flt-ico { width:13px; height:13px; display:block; }
+  .flt-btn .chev { font-size:10px; color:var(--muted); margin-left:1px; }
+  .flt-badge { min-width:15px; height:15px; padding:0 4px; border-radius:999px; background:var(--brand);
+               color:#fff; font-size:10px; line-height:15px; text-align:center; font-weight:700; }
+  .flt-badge[hidden] { display:none; }
+
+  /* 宽度必须是确定值：两列 grid 的 1fr 需要父宽才能分配；窄视口用 100vw-24px 封顶，
+     与 placeFilterMenu() 的 8px 边距同源，绝不溢出 */
+  .flt-menu { position:fixed; z-index:60; width:min(480px, calc(100vw - 24px)); max-height:70vh; overflow:auto;
+              background:#fff; border:1px solid var(--line); border-radius:12px;
+              box-shadow:0 10px 30px rgba(15,23,42,.14); padding:6px 0; font-size:13px; }
+  .flt-menu[hidden] { display:none; }
+  .flt-title { padding:4px 14px 5px; font-size:11px; color:var(--muted); }
+  .flt-opt { display:flex; align-items:center; gap:8px; width:100%; padding:7px 14px;
+             border:0; background:transparent; font-size:13px; font-family:inherit;
+             color:#1f2937; text-align:left; cursor:pointer; }
+  .flt-opt:hover { background:#f1f5f9; }
+  .flt-opt .mk { flex:0 0 14px; width:14px; text-align:center; color:var(--brand); font-size:12px; }
+  /* min-width:0 是必须的：两列时列宽约 207px，原先的 max-width:252px 会横向溢出 */
+  .flt-opt .lb { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .flt-opt .arw { flex:0 0 auto; color:var(--muted); font-size:11px; }
+  .flt-sep { height:1px; background:var(--line); margin:6px 0; }
+  .flt-input { width:calc(100% - 28px); margin:2px 14px 6px; height:28px; padding:0 9px;
+               border:1px solid var(--line); border-radius:8px; font-size:12.5px; font-family:inherit; }
+  .flt-input:focus { outline:none; border-color:#c7d2fe; box-shadow:0 0 0 2px #eef2ff; }
+  .flt-sub { position:fixed; z-index:61; min-width:200px; max-height:50vh; overflow:auto;
+             background:#fff; border:1px solid var(--line); border-radius:10px;
+             box-shadow:0 10px 30px rgba(15,23,42,.14); padding:5px 0; }
+  .flt-sub[hidden] { display:none; }
+  .flt-reset { color:#b91c1c; }
+  /* .flt-opt 是 display:flex，会盖掉 UA 的 [hidden]{display:none}，「更多」靠 hidden 控制必须补这条 */
+  .flt-opt[hidden] { display:none; }
+
+  /* ---- 菜单两列分栏：左列状态+交期，右列客户+单号，重置跨列置底 ---- */
+  .flt-cols { display:grid; grid-template-columns:1fr 1fr; column-gap:10px; }
+  /* min-width:0 不能省：grid 的 1fr 隐含 min-width:auto(=min-content)，
+     长客户名会把列撑破，导致 ellipsis 失效、菜单超出 max-width */
+  .flt-col { min-width:0; }
+  @media (max-width: 480px) { .flt-cols { grid-template-columns:1fr; } }
+
+  /* ---- 客户搜索框（tag 嵌在输入框内部） ---- */
+  .flt-combo { display:flex; flex-wrap:wrap; align-items:center; gap:4px;
+               width:calc(100% - 28px); margin:2px 14px 6px; padding:3px 6px;
+               min-height:32px; border:1px solid var(--line); border-radius:8px;
+               font-size:12.5px; background:#fff; cursor:text; }
+  .flt-combo:focus-within { border-color:#c7d2fe; box-shadow:0 0 0 2px #eef2ff; }
+  .flt-combo input { flex:1 1 60px; min-width:60px; height:22px; border:0; outline:none;
+                     background:transparent; font:inherit; color:inherit; padding:0; }
+  .flt-tag { display:inline-flex; align-items:center; gap:4px; max-width:100%;
+             background:#e0e7ff; color:var(--brand2); border:1px solid #c7d2fe;
+             border-radius:999px; padding:1px 4px 1px 8px; font-size:11.5px; line-height:1.6; }
+  .flt-tag .tx { min-width:0; max-width:110px; overflow:hidden;
+                 text-overflow:ellipsis; white-space:nowrap; }
+  .flt-tag .x { border:0; background:transparent; color:var(--brand2); cursor:pointer;
+                font-size:12px; line-height:1; padding:0 3px; border-radius:999px; }
+  .flt-tag .x:hover { background:#c7d2fe; }
+
+  /* ---- 客户候选列表 ---- */
+  /* 必须自己滚：父级 .flt-menu 已是 70vh 上限，候选一多会把输入框滚出视口，
+     而用户正在打字。overscroll-behavior 防止滚动链传给父级造成双滚动条抢鼠标 */
+  .flt-cand { max-height:min(38vh, 240px); overflow:auto; overscroll-behavior:contain; }
+  .flt-cand-empty { padding:6px 14px 8px; color:var(--muted); font-size:12px; }
+  .flt-cand .flt-opt.hi { background:#eef2ff; }
+
   /* 台账表：固定列宽 + 表头吸顶（基础 table 样式见上「通用」段，此处不再重复定义） */
   #pOrderTable table, #pTaskTable table { table-layout:fixed; }
   #pOrderTable th:nth-child(1){width:19%} #pOrderTable th:nth-child(2){width:17%}
@@ -309,7 +382,20 @@
     <!-- 第二行：订单台账 / 任务台账 / 今日简报 —— 各自固定高度、内部滚动 -->
     <div class="p-row p-row-main">
       <div class="panel p-order">
-        <h3>📦 订单台账 <small id="pOrderCount"></small></h3>
+        <h3>📦 订单台账 <small id="pOrderCount"></small>
+          <span class="panel-tools">
+            <button type="button" class="flt-btn" id="ordFilterBtn" aria-haspopup="menu"
+                    aria-expanded="false" title="按状态 / 交期 / 客户 / 单号筛选订单">
+              <svg class="flt-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                   stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2 3h12L9.4 8.7V13L6.6 11.6V8.7L2 3z"/>
+              </svg>
+              <span>筛选</span>
+              <span class="flt-badge" id="ordFilterBadge" hidden>0</span>
+              <span class="chev">▾</span>
+            </button>
+          </span>
+        </h3>
         <div class="panel-body" id="pOrderTable"></div>
       </div>
       <div class="panel p-task">
@@ -625,12 +711,26 @@ function emptyState(icon, title, desc, eg){
 
 function renderOrderTable(orders){
   const box = el("pOrderTable"); if(!box) return;
-  orders = orders || (LAST_LEDGER && LAST_LEDGER.orders) || [];
-  box.innerHTML = orders.length ? (
-    "<table><tr><th>单号</th><th>客户</th><th>产品</th><th>数量</th><th>交期</th><th>状态</th></tr>"+
-    orderRows(orders)+"</table>") : emptyState("📭", "台账还没有订单",
+  const all = (LAST_LEDGER && LAST_LEDGER.orders) || [];
+  /* 无参调用（展开变更履历 / 查询定位后的重渲染）也必须取「筛选后」集合，
+     否则一展开履历就把当前筛选条件冲掉了 */
+  orders = orders || filterOrders(all, ORDER_FILTER);
+  if(orders.length){
+    box.innerHTML = "<table><tr><th>单号</th><th>客户</th><th>产品</th><th>数量</th><th>交期</th><th>状态</th></tr>"+
+      orderRows(orders)+"</table>";
+  }else if(all.length){
+    /* 有单但被筛没了：必须和「真没单」区分开，否则用户以为数据丢了 */
+    box.innerHTML = '<div class="empty-state">'+
+      '<div class="es-icon">🔎</div>'+
+      '<div class="es-title">当前筛选无匹配订单</div>'+
+      '<div class="es-desc">共 '+all.length+' 笔订单，被当前筛选条件全部挡住。</div>'+
+      '<div class="es-eg"><button type="button" class="flt-btn" onclick="resetOrderFilter()">重置筛选</button></div>'+
+      '</div>';
+  }else{
+    box.innerHTML = emptyState("📭", "台账还没有订单",
       "客户在「💬 微信沟通」页发来订单消息后，这里会自动生成订单行并持续跟踪变更。",
       "「小陈，法兰 DN80 250 个，28 号前要」");
+  }
   applyHit(false);   /* 重渲染后把当前定位高亮补回去，避免刷新就把人看丢了 */
 }
 
@@ -672,11 +772,11 @@ function renderPlatform(L){
     return;
   }
   LAST_LEDGER = L;
-  const orders=L.orders||[], tasks=L.tasks||[];
+  const tasks=L.tasks||[];
   if(el("modeBadge")) el("modeBadge").textContent = L.mode||"";
-  el("pOrderCount").textContent = "（"+orders.length+" 笔）";
   el("pTaskCount").textContent = "（"+tasks.length+" 项）";
-  renderOrderTable(orders);
+  /* 订单计数与表格统一走 refreshOrderView：它会带上当前筛选条件 */
+  refreshOrderView();
   el("pTaskTable").innerHTML = tasks.length ? (
     "<table><tr><th>事项</th><th>责任人</th><th>期限</th><th>状态</th></tr>"+
     taskRows(tasks)+"</table>") : emptyState("🗂️", "台账还没有任务",
@@ -694,6 +794,548 @@ function renderStats(L){
     {n:delivered, t:"已交付"}, {n:cancelled, t:"已取消"}, {n:tasks.length, t:"任务总数"},
   ];
   el("stats").innerHTML = data.map(d=>`<div class="stat"><div class="n">${d.n}</div><div class="t">${d.t}</div></div>`).join("");
+}
+
+/* ================= 订单台账 · 四维筛选 =================
+   维度：状态（多选）/ 交期（单选）/ 客户（多选）/ 单号（子串输入）。
+   同维多值取并集，维与维之间取交集；空集合或空串表示该维不限。
+   判定函数（effectiveDue / dueBucket / matchOrder / filterOrders / activeDims）不碰 DOM，
+   便于脱离浏览器做表驱动测试——筛选的边界最容易「看着对、实际差一天」。 */
+/* custKeyword 是「客户搜索框里正在输入的关键字」，**不是筛选维度**：
+   它只影响候选列表显示什么，不参与 matchOrder、不计入 activeDims、不改表格 */
+const ORDER_FILTER = { status: new Set(), due: "", customers: new Set(), oid: "", custKeyword: "" };
+
+/* 与 contracts.STATUS_ORDER 对齐，顺序即业务流转顺序 */
+const FILTER_STATUSES = ["沟通中", "已确认", "生产中", "部分交付", "已交付", "已取消"];
+const DUE_OPTIONS = [
+  { v: "",        t: "全部" },
+  { v: "overdue", t: "已逾期" },
+  { v: "d7",      t: "7 天内" },
+  { v: "d30",     t: "30 天内" },
+  { v: "none",    t: "未填交期" },
+];
+const CUST_VISIBLE = 5;   /* 客户超过 5 个，其余收进「更多 ▸」二级菜单 */
+
+/* 取本地「今天 00:00」，不用 UTC —— 否则东八区早上 8 点前会整体差一天 */
+function filterToday(){
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+function parseYmd(s){
+  if(!s || typeof s !== "string") return null;
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s.trim());
+  if(!m) return null;
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/* 有效交期：与 contracts.effective_delivery_date 同口径——分批单取「最晚批次日」，
+   无批次才回退单值 delivery_date。台账接口不给算好的有效交期，前端必须自己算，
+   否则分批单（delivery_date 常为 null）会被误判成「未填交期」。 */
+function effectiveDue(o){
+  o = o || {};
+  const bs = o.delivery_batches;
+  if(Array.isArray(bs) && bs.length){
+    let max = null;
+    for(let i = 0; i < bs.length; i++){
+      const d = parseYmd(bs[i] && bs[i].date);
+      if(d && (!max || d > max)) max = d;
+    }
+    if(max) return max;
+  }
+  return parseYmd(o.delivery_date);
+}
+
+/* 交期档位：overdue | d7 | d30 | later | none
+   逾期独占一档，因此不会与「7 天内」重叠 */
+function dueBucket(dd, today){
+  if(!dd) return "none";
+  const t = today || filterToday();
+  const diff = Math.round((dd.getTime() - t.getTime()) / 86400000);
+  if(diff < 0) return "overdue";
+  if(diff <= 7) return "d7";
+  if(diff <= 30) return "d30";
+  return "later";
+}
+
+function matchOrder(o, f, today){
+  f = f || ORDER_FILTER; o = o || {};
+  if(f.status && f.status.size && !f.status.has(o.status)) return false;
+  if(f.customers && f.customers.size && !f.customers.has(o.customer)) return false;
+  if(f.oid && String(f.oid).trim()){
+    const key = String(f.oid).trim().toLowerCase();
+    if(String(o.order_id || "").toLowerCase().indexOf(key) < 0) return false;
+  }
+  if(f.due){
+    const b = dueBucket(effectiveDue(o), today);
+    if(f.due === "none" ? b !== "none" : b !== f.due) return false;
+  }
+  return true;
+}
+function filterOrders(list, f, today){
+  return (list || []).filter(function(o){ return matchOrder(o, f, today); });
+}
+/* 已生效「维度」数（0~4），用于按钮徽标；按维度算，不按勾选个数算 */
+function activeDims(f){
+  f = f || ORDER_FILTER;
+  let n = 0;
+  if(f.status && f.status.size) n++;
+  if(f.due) n++;
+  if(f.customers && f.customers.size) n++;
+  if(f.oid && String(f.oid).trim()) n++;
+  return n;
+}
+
+/* ---------- 筛选器 UI（菜单挂 body：.panel 是 overflow:hidden，子元素会被裁掉） ---------- */
+let FLT_MENU = null, FLT_SUB = null;
+let FLT_CUST_HI = -1;   /* 客户候选里键盘高亮的下标；-1 = 无高亮 */
+
+function escAttr(s){ return esc(s).replace(/"/g, "&quot;"); }
+
+/* 客户按出现次数降序；次数相同按名称排，保证每次打开顺序稳定 */
+function filterCustomers(){
+  const list = (LAST_LEDGER && LAST_LEDGER.orders) || [];
+  const cnt = new Map();
+  list.forEach(function(o){
+    const c = o && o.customer;
+    if(c) cnt.set(c, (cnt.get(c) || 0) + 1);
+  });
+  return Array.from(cnt.entries())
+    .sort(function(a, b){ return b[1] - a[1] || a[0].localeCompare(b[0], "zh"); })
+    .map(function(e){ return e[0]; });
+}
+
+/* 子串匹配客户全名，不区分大小写；空关键字视为「不过滤」。
+   例：「永嘉」命中「王总（永嘉精密机械）」，「王总」同样命中 */
+function custMatches(name, kw){
+  const k = String(kw == null ? "" : kw).trim().toLowerCase();
+  if(!k) return true;
+  return String(name == null ? "" : name).toLowerCase().indexOf(k) >= 0;
+}
+
+/* 候选分区（纯函数，便于表驱动测试）：
+   - 关键字为空 → 前 CUST_VISIBLE 个直接列出，其余进「更多 ▸」（保留原分页语义）
+   - 关键字非空 → 全量命中、不分页（搜索本身就在缩小范围，再分页反而碍事）
+   list 参数仅用于测试注入；不传则回退到 filterCustomers()。 */
+function custCandPlan(kw, list){
+  const all = list || filterCustomers();
+  const k = String(kw == null ? "" : kw).trim();
+  if(!k) return { searching: false, main: all.slice(0, CUST_VISIBLE), rest: all.slice(CUST_VISIBLE) };
+  return { searching: true, main: all.filter(function(c){ return custMatches(c, k); }), rest: [] };
+}
+
+/* opts 用于把候选行渲染成 listbox 里的 option（role/aria 与菜单项不同）：
+   { role:"option", id:"fltCand-2", cand:true } */
+function filterOptRow(kind, val, label, multi, opts){
+  opts = opts || {};
+  const role = opts.role || (multi ? "menuitemcheckbox" : "menuitemradio");
+  const idAttr = opts.id ? ' id="' + escAttr(opts.id) + '"' : "";
+  const candAttr = opts.cand ? ' data-cand="1"' : "";
+  const ariaAttr = opts.cand ? ' aria-selected="false"' : ' aria-checked="false"';
+  return '<button type="button" class="flt-opt" role="' + role + '"' + idAttr + ariaAttr + candAttr +
+    ' data-kind="' + kind + '" data-v="' + escAttr(val) +
+    '" data-multi="' + (multi ? 1 : 0) + '" title="' + escAttr(label) + '">' +
+    '<span class="mk"></span><span class="lb">' + esc(label) + '</span></button>';
+}
+
+function renderFilterMenu(){
+  const custs = filterCustomers();
+  const plan = custCandPlan(ORDER_FILTER.custKeyword || "", custs);
+
+  /* 两列：左列状态+交期，右列客户+单号，重置跨列置底（两列高度天然不等，置底更稳） */
+  FLT_MENU.innerHTML =
+    '<div class="flt-cols">' +
+
+      '<div class="flt-col">' +
+        '<div class="flt-title">状态</div>' +
+        FILTER_STATUSES.map(function(s){ return filterOptRow("status", s, s, true); }).join("") +
+        '<div class="flt-sep"></div><div class="flt-title">交期</div>' +
+        DUE_OPTIONS.map(function(d){ return filterOptRow("due", d.v, d.t, false); }).join("") +
+      '</div>' +
+
+      '<div class="flt-col">' +
+        '<div class="flt-title">客户</div>' +
+        /* tag 与 input 同处一个 .flt-combo；候选列表在 combo 之外，
+           所以重写候选不会影响输入框焦点 */
+        '<div class="flt-combo" id="fltCustCombo">' +
+          '<span id="fltCustTags"></span>' +
+          '<input id="fltCustSearch" type="text" autocomplete="off" spellcheck="false" ' +
+          'role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls="fltCustCand" ' +
+          'aria-label="搜索客户" placeholder="搜索客户…" ' +
+          'value="' + escAttr(ORDER_FILTER.custKeyword || "") + '">' +
+        '</div>' +
+        '<div class="flt-cand" id="fltCustCand" role="listbox" ' +
+        'aria-label="客户候选" aria-multiselectable="true"></div>' +
+        /* 「更多」只按 rest 生成一次；后续 renderCustCand 只切 hidden，不销毁节点 */
+        (plan.rest.length
+          ? '<button type="button" class="flt-opt" id="fltCustMore" data-sub="customer" ' +
+            'role="menuitem" aria-haspopup="true">' +
+            '<span class="mk"></span><span class="lb">更多</span><span class="arw">▸</span></button>'
+          : "") +
+        '<div class="flt-sep"></div><div class="flt-title">单号</div>' +
+        '<input class="flt-input" id="fltOid" type="text" autocomplete="off" ' +
+        'placeholder="输入单号片段，如 20261024-0" value="' + escAttr(ORDER_FILTER.oid || "") + '">' +
+      '</div>' +
+
+    '</div>' +
+
+    '<div class="flt-sep"></div>' +
+    '<button type="button" class="flt-opt flt-reset" data-kind="reset" role="menuitem">' +
+    '<span class="mk"></span><span class="lb">重置筛选</span></button>';
+
+  FLT_SUB.innerHTML = plan.rest.length
+    ? '<div class="flt-title">更多客户</div>' +
+      plan.rest.map(function(c){ return filterOptRow("customer", c, c, true); }).join("")
+    : "";
+  FLT_SUB.hidden = true;
+  renderCustTags();
+  renderCustCand();
+  syncFilterMarks();
+}
+
+/* 已选客户 → tag（只重写 #fltCustTags，不碰 candidates，避免打断输入焦点）。
+   不跟台账做交集：客户可能已被删单，但筛选还在用它，净化会让 tag 与结果对不上。 */
+function renderCustTags(){
+  const box = el("fltCustTags"); if(!box) return;
+  box.innerHTML = Array.from(ORDER_FILTER.customers).map(function(c){
+    const a = escAttr(c);
+    return '<span class="flt-tag" title="' + a + '">' +
+      '<span class="tx">' + esc(c) + '</span>' +
+      '<button type="button" class="x" data-deltag="' + a + '" ' +
+      'aria-label="移除 ' + a + '" title="移除">×</button></span>';
+  }).join("");
+}
+
+/* 候选列表：只由关键字决定（选中态由 syncFilterMarks 写 ✓，不参与 HTML 生成） */
+function renderCustCand(){
+  const box = el("fltCustCand"); if(!box) return;
+  const kw = ORDER_FILTER.custKeyword || "";
+  const plan = custCandPlan(kw);
+  if(plan.searching) closeFilterSub();          /* 搜索态不保留二级菜单，避免两份列表抢视线 */
+
+  const more = el("fltCustMore");
+  if(more) more.hidden = plan.searching || !plan.rest.length;
+
+  if(plan.main.length){
+    box.innerHTML = plan.main.map(function(c, i){
+      return filterOptRow("customer", c, c, true, { role: "option", id: "fltCand-" + i, cand: true });
+    }).join("");
+  }else{
+    /* 两种空态必须分开：台账真没客户 vs 关键字搜不到 */
+    box.innerHTML = '<div class="flt-cand-empty" role="status">' +
+      (plan.searching ? "无匹配「" + esc(kw.trim()) + "」" : "台账暂无客户") + '</div>';
+  }
+
+  const inp = el("fltCustSearch");
+  if(inp) inp.setAttribute("aria-expanded", plan.main.length ? "true" : "false");
+  FLT_CUST_HI = -1;
+  syncFilterMarks();
+}
+
+function syncFilterMarks(){
+  [FLT_MENU, FLT_SUB].forEach(function(root){
+    if(!root) return;
+    root.querySelectorAll(".flt-opt[data-kind]").forEach(function(o){
+      const k = o.dataset.kind, v = o.dataset.v;
+      let on = false;
+      if(k === "status") on = ORDER_FILTER.status.has(v);
+      else if(k === "customer") on = ORDER_FILTER.customers.has(v);
+      else if(k === "due") on = (ORDER_FILTER.due || "") === v;
+      /* 候选行是 listbox 里的 option，语义上只有 aria-selected，没有 aria-checked */
+      o.setAttribute(o.dataset.cand === "1" ? "aria-selected" : "aria-checked", on ? "true" : "false");
+      const mk = o.querySelector(".mk");
+      if(mk) mk.textContent = on ? (o.dataset.multi === "1" ? "✓" : "•") : "";
+    });
+  });
+}
+
+function placeFilterMenu(){
+  if(!FLT_MENU || FLT_MENU.hidden) return;
+  const btn = el("ordFilterBtn"); if(!btn) return;
+  const r = btn.getBoundingClientRect();
+  FLT_MENU.style.visibility = "hidden";
+  const mw = FLT_MENU.offsetWidth, mh = FLT_MENU.offsetHeight;
+  let left = r.right - mw;
+  if(left < 8) left = 8;
+  if(left + mw > window.innerWidth - 8) left = window.innerWidth - mw - 8;
+  let top = r.bottom + 6;
+  if(top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);   /* 下方不够就向上翻 */
+  FLT_MENU.style.left = Math.round(left) + "px";
+  FLT_MENU.style.top = Math.round(top) + "px";
+  FLT_MENU.style.visibility = "";
+}
+
+function closeFilterSub(){ if(FLT_SUB) FLT_SUB.hidden = true; }
+
+function openFilterMenu(){
+  ensureFilterMenu();
+  renderFilterMenu();
+  FLT_MENU.hidden = false;
+  placeFilterMenu();
+  const btn = el("ordFilterBtn");
+  if(btn) btn.setAttribute("aria-expanded", "true");
+}
+function closeFilterMenu(){
+  if(FLT_MENU) FLT_MENU.hidden = true;
+  closeFilterSub();
+  /* 关键字是瞬态 UI，不是筛选维度：关掉菜单就清，否则重开时会出现
+     「输入框是空的、候选却被过滤了」的鬼状态 */
+  ORDER_FILTER.custKeyword = "";
+  FLT_CUST_HI = -1;
+  const s = el("fltCustSearch"); if(s) s.value = "";
+  const btn = el("ordFilterBtn");
+  if(btn) btn.setAttribute("aria-expanded", "false");
+}
+
+function toggleFilterSub(btn){
+  if(!FLT_SUB || !FLT_SUB.innerHTML) return;
+  if(!FLT_SUB.hidden){ closeFilterSub(); return; }
+  FLT_SUB.hidden = false;
+  const r = btn.getBoundingClientRect();
+  const w = FLT_SUB.offsetWidth, h = FLT_SUB.offsetHeight;
+  let left = r.right - 2;
+  if(left + w > window.innerWidth - 8) left = Math.max(8, r.left - w + 2);
+  let top = r.top - 6;
+  if(top + h > window.innerHeight - 8) top = Math.max(8, window.innerHeight - h - 8);
+  FLT_SUB.style.left = Math.round(left) + "px";
+  FLT_SUB.style.top = Math.round(top) + "px";
+  syncFilterMarks();
+}
+
+/* 把焦点还给客户搜索框，光标置于末尾（仅在确实丢了焦点时调） */
+function focusCustInput(){
+  const inp = el("fltCustSearch"); if(!inp) return;
+  if(document.activeElement === inp) return;
+  inp.focus();
+  const n = inp.value.length;
+  if(inp.setSelectionRange) inp.setSelectionRange(n, n);
+}
+
+/* 客户勾选/取消。
+   注意：这里**不能重建候选列表**（renderCustCand）。候选 HTML 只由关键字决定，
+   选中态由 syncFilterMarks 写 ✓ 就行；一旦重建，刚被点击的那个 button 会被摘出 DOM，
+   冒泡到 document 时 FLT_MENU.contains(e.target) 变 false，菜单会被「点外部」逻辑关掉。 */
+function toggleCustomer(v){
+  if(!v) return;
+  ORDER_FILTER.customers.has(v) ? ORDER_FILTER.customers.delete(v) : ORDER_FILTER.customers.add(v);
+  renderCustTags();
+  syncFilterMarks();
+  refreshOrderView();
+}
+
+function onFilterMenuClick(e){
+  /* tag 上的 × 删除：不在 .flt-opt 里，必须单独判，且要排在 .flt-opt 之前 */
+  const del = e.target.closest ? e.target.closest("[data-deltag]") : null;
+  if(del){
+    const dv = del.getAttribute("data-deltag");
+    if(dv){
+      ORDER_FILTER.customers.delete(dv);
+      renderCustTags();
+      syncFilterMarks();
+      refreshOrderView();
+      focusCustInput();
+    }
+    return;
+  }
+  const more = e.target.closest ? e.target.closest("[data-sub]") : null;
+  if(more){ toggleFilterSub(more); return; }
+  const opt = e.target.closest ? e.target.closest(".flt-opt") : null;
+  if(!opt) return;
+  const kind = opt.dataset.kind, v = opt.dataset.v;
+  if(kind === "reset"){ resetOrderFilter(); return; }
+  if(kind === "status"){
+    ORDER_FILTER.status.has(v) ? ORDER_FILTER.status.delete(v) : ORDER_FILTER.status.add(v);
+  }else if(kind === "customer"){
+    toggleCustomer(v);
+    return;
+  }else if(kind === "due"){
+    ORDER_FILTER.due = v || "";
+  }else{
+    return;
+  }
+  syncFilterMarks();
+  refreshOrderView();
+}
+
+function ensureFilterMenu(){
+  if(FLT_MENU) return FLT_MENU;
+  FLT_MENU = document.createElement("div");
+  FLT_MENU.className = "flt-menu";
+  FLT_MENU.id = "ordFilterMenu";
+  FLT_MENU.hidden = true;
+  FLT_MENU.setAttribute("role", "menu");
+  document.body.appendChild(FLT_MENU);
+
+  FLT_SUB = document.createElement("div");
+  FLT_SUB.className = "flt-sub";
+  FLT_SUB.id = "ordFltSub";
+  FLT_SUB.hidden = true;
+  document.body.appendChild(FLT_SUB);
+
+  FLT_MENU.addEventListener("click", onFilterMenuClick);
+  FLT_SUB.addEventListener("click", onFilterMenuClick);
+
+  /* 单号 → 即时筛选；客户关键字 → 只重绘候选。
+     客户搜索**不能**调 refreshOrderView：关键字不是筛选维度，
+     每敲一个字符重绘表格（含强制重排 + 高亮补回）纯属浪费还会闪。 */
+  FLT_MENU.addEventListener("input", function(e){
+    if(!e.target) return;
+    if(e.target.id === "fltOid"){
+      ORDER_FILTER.oid = e.target.value;
+      refreshOrderView();
+    }else if(e.target.id === "fltCustSearch"){
+      if(e.isComposing) return;          /* 拼音组合中不筛，避免中途一路闪「无匹配」 */
+      ORDER_FILTER.custKeyword = e.target.value;
+      renderCustCand();
+    }
+  });
+  FLT_MENU.addEventListener("compositionend", function(e){
+    if(e.target && e.target.id === "fltCustSearch"){
+      ORDER_FILTER.custKeyword = e.target.value;
+      renderCustCand();
+    }
+  });
+  FLT_MENU.addEventListener("keydown", onCustKeydown);
+  /* capture 阶段抢在浏览器默认聚焦之前：删 tag 时焦点不离开输入框 */
+  FLT_MENU.addEventListener("mousedown", onFilterMenuMousedown, true);
+
+  return FLT_MENU;
+}
+
+/* ---------- 客户搜索框的键盘与鼠标 ---------- */
+
+/* 高亮下标推进（纯函数，便于表驱动测试）。
+   无高亮（-1）时：↓ 从第 0 项开始，↑ 从最后一项开始 */
+function nextCustHi(cur, delta, len){
+  if(len <= 0) return -1;
+  if(cur < 0) return delta > 0 ? 0 : len - 1;
+  let i = cur + delta;
+  if(i < 0) i = 0;
+  if(i > len - 1) i = len - 1;
+  return i;
+}
+
+function custCandRows(){
+  const box = el("fltCustCand");
+  if(!box || !box.querySelectorAll) return [];
+  return Array.prototype.slice.call(box.querySelectorAll(".flt-opt"));
+}
+
+function scrollCustHi(){
+  const box = el("fltCustCand"), rows = custCandRows();
+  const row = rows[FLT_CUST_HI];
+  if(!box || !row) return;
+  /* 手算滚位，不用 scrollIntoView —— 祖先链上有 position:fixed，
+     它可能把 document 也滚一下 */
+  const top = row.offsetTop, bot = top + row.offsetHeight;
+  if(top < box.scrollTop) box.scrollTop = top;
+  else if(bot > box.scrollTop + box.clientHeight) box.scrollTop = bot - box.clientHeight;
+}
+
+function moveCustHi(delta){
+  const rows = custCandRows();
+  FLT_CUST_HI = nextCustHi(FLT_CUST_HI, delta, rows.length);
+  rows.forEach(function(r, i){ r.classList.toggle("hi", i === FLT_CUST_HI); });
+  const inp = el("fltCustSearch");
+  if(inp){
+    const cur = rows[FLT_CUST_HI];
+    if(cur && cur.id) inp.setAttribute("aria-activedescendant", cur.id);
+    else inp.removeAttribute("aria-activedescendant");
+  }
+  scrollCustHi();
+}
+
+function pickCustHi(){
+  const rows = custCandRows();
+  if(!rows.length) return;
+  const row = rows[FLT_CUST_HI] || rows[0];
+  const v = row && row.dataset ? row.dataset.v : "";
+  if(!v) return;
+  toggleCustomer(v);
+  focusCustInput();
+}
+
+function onCustKeydown(e){
+  if(!e.target || e.target.id !== "fltCustSearch") return;
+  if(e.isComposing || e.keyCode === 229) return;     /* 输入法上屏的 Enter 不能当「选中」 */
+
+  if(e.key === "ArrowDown" || e.key === "ArrowUp"){
+    e.preventDefault();
+    moveCustHi(e.key === "ArrowDown" ? 1 : -1);
+    return;
+  }
+  if(e.key === "Enter"){
+    e.preventDefault();
+    pickCustHi();
+    return;
+  }
+  /* 输入框为空时退格 = 删最后一个 tag。value 非空一律放行给浏览器原生删除 */
+  if(e.key === "Backspace" && !e.target.value && ORDER_FILTER.customers.size){
+    e.preventDefault();
+    const arr = Array.from(ORDER_FILTER.customers);
+    ORDER_FILTER.customers.delete(arr[arr.length - 1]);
+    renderCustTags();
+    syncFilterMarks();
+    refreshOrderView();
+  }
+}
+
+function onFilterMenuMousedown(e){
+  const t = e.target;
+  if(!t || !t.closest) return;
+  if(t.closest("[data-deltag]")){ e.preventDefault(); return; }
+  const combo = t.closest(".flt-combo");
+  if(!combo) return;
+  /* 点在 input 本身：放行，让浏览器原生定位光标（强行 focus 会把光标推到末尾）
+     点在死区（tag 之间、换行后空白、tag 文字）：拦掉默认行为，光标放末尾 */
+  if(t === combo || t.closest(".flt-tag")){
+    e.preventDefault();
+    focusCustInput();
+  }
+}
+
+function resetOrderFilter(opts){
+  ORDER_FILTER.status.clear();
+  ORDER_FILTER.customers.clear();
+  ORDER_FILTER.due = "";
+  ORDER_FILTER.oid = "";
+  ORDER_FILTER.custKeyword = "";
+  FLT_CUST_HI = -1;
+  const inp = el("fltOid"); if(inp) inp.value = "";
+  const cs = el("fltCustSearch"); if(cs) cs.value = "";
+  /* 菜单可能压根没创建过（ensureVisible / resetAll 会在无 UI 时调到这里），
+     两个渲染函数都按节点判空，安全 */
+  renderCustTags();
+  renderCustCand();
+  syncFilterMarks();
+  refreshOrderView();
+  if(!(opts && opts.silent)) toast("🧹 已重置筛选条件");
+}
+
+/* 唯一渲染出口：算筛选结果 → 更新计数与徽标 → 重绘表格。
+   所有会改变台账或筛选的路径都走这里，避免「有的地方筛、有的地方不筛」。 */
+function refreshOrderView(){
+  const all = (LAST_LEDGER && LAST_LEDGER.orders) || [];
+  const shown = filterOrders(all, ORDER_FILTER);
+  const dims = activeDims(ORDER_FILTER);
+  const cnt = el("pOrderCount");
+  if(cnt) cnt.textContent = dims ? "（" + shown.length + " / " + all.length + " 笔）"
+                                 : "（" + all.length + " 笔）";
+  renderOrderTable(shown);
+  const badge = el("ordFilterBadge");
+  if(badge){ badge.hidden = !dims; badge.textContent = String(dims); }
+}
+
+/* 查询命中被筛选挡住时，先清筛选再跳转 —— 绝不让高亮静默失效 */
+function ensureVisible(ids){
+  if(!ids || !ids.length) return false;
+  const all = (LAST_LEDGER && LAST_LEDGER.orders) || [];
+  const shown = new Set(filterOrders(all, ORDER_FILTER).map(function(o){ return o.order_id; }));
+  const hidden = ids.filter(function(id){ return !shown.has(id); });
+  if(!hidden.length) return false;
+  resetOrderFilter({ silent: true });
+  toast("🔎 已清空筛选，以显示查询命中的订单");
+  return true;
 }
 
 /* 进入平台页 / 初始化 / 重置后都会调用：拉取台账并渲染 */
@@ -730,6 +1372,8 @@ function applyQuery(data){
   const f = (data && data.focus) || {};
   const ids = Array.isArray(f.order_ids) ? f.order_ids.slice() : [];
   const kind = f.kind || "";
+  /* 命中单若被当前筛选挡住，先清筛选再跳转，否则高亮会静默消失 */
+  if(ids.length && (kind === "orders" || kind === "history" || kind === "clarify")) ensureVisible(ids);
 
   if(data.mode === "briefing" || kind === "briefing"){
     if(el("briefResult")) el("briefResult").textContent = stripNote(data.reply||"（无结果）");
@@ -820,8 +1464,9 @@ async function resetAll(){
     await apiPost("/api/reset");
     if(el("wxChat")) el("wxChat").innerHTML="";
     if(el("briefResult")) el("briefResult").textContent="点击上方按钮生成今日简报。";
-    /* 台账清空后旧的定位/展开状态必须一起清掉，否则会指向不存在的单 */
+    /* 台账清空后旧的定位/展开/筛选状态必须一起清掉，否则会指向不存在的单或筛出空表 */
     HIT_IDS = []; histOpen.clear(); note("");
+    resetOrderFilter({ silent:true });
     addWx("agent","台账已清空，可重新模拟客户发消息。","hint");
     await refreshPlatform();
   }catch(e){ showErr("重置失败："+e.message); }
@@ -864,6 +1509,55 @@ async function init(){
     const b = document.querySelector(".query-box button");
     return !(b && b.disabled);
   });
+})();
+
+/* 订单台账筛选器：同样放顶层绑定（init() 是 async，异常会让绑定静默丢失） */
+(function bindOrderFilter(){
+  const btn = el("ordFilterBtn");
+  if(!btn) return;
+  btn.addEventListener("click", function(e){
+    e.stopPropagation();
+    if(FLT_MENU && !FLT_MENU.hidden) closeFilterMenu(); else openFilterMenu();
+  });
+  /* 点菜单外关闭 */
+  document.addEventListener("click", function(e){
+    if(!FLT_MENU || FLT_MENU.hidden) return;
+    /* 兜底：同一次点击的委托处理器可能已经重建了 DOM（删 tag 时重写 #fltCustTags），
+       此时 e.target 已脱离文档，contains() 会误判成「点在菜单外」 */
+    if(e.target && e.target.isConnected === false) return;
+    if(e.target.closest && e.target.closest("#ordFilterBtn")) return;
+    if(FLT_MENU.contains(e.target)) return;
+    if(FLT_SUB && !FLT_SUB.hidden && FLT_SUB.contains(e.target)) return;
+    closeFilterMenu();
+  });
+  /* Esc 三级：清关键字 → 收子菜单 → 关菜单。
+     菜单没开时什么都不做，否则在查询框按 Esc 会静默清掉一个看不见的关键字 */
+  document.addEventListener("keydown", function(e){
+    if(e.key !== "Escape") return;
+    if(!FLT_MENU || FLT_MENU.hidden) return;
+    if(ORDER_FILTER.custKeyword){
+      ORDER_FILTER.custKeyword = "";
+      FLT_CUST_HI = -1;
+      const s = el("fltCustSearch"); if(s) s.value = "";
+      renderCustCand();
+      focusCustInput();
+      e.preventDefault();
+      return;
+    }
+    if(FLT_SUB && !FLT_SUB.hidden){ closeFilterSub(); e.preventDefault(); return; }
+    closeFilterMenu();
+  });
+  window.addEventListener("resize", closeFilterMenu);
+  /* 面板内部滚动时按钮会移动：跟随重定位。
+     但菜单/子菜单**自身**滚动要跳过 —— placeFilterMenu 会切 visibility 再读
+     offsetWidth/offsetHeight（强制同步布局），滚动候选区时每帧一次纯属浪费 */
+  window.addEventListener("scroll", function(e){
+    if(!FLT_MENU || FLT_MENU.hidden) return;
+    if(e.target && e.target !== window && FLT_MENU.contains(e.target)) return;
+    if(FLT_SUB && e.target && e.target !== window &&
+       (e.target === FLT_SUB || FLT_SUB.contains(e.target))) return;
+    placeFilterMenu();
+  }, true);
 })();
 
 init();

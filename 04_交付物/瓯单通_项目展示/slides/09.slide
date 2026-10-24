@@ -1,0 +1,47 @@
+<Slide style={{ width: 1280, height: 720, background: '#0F172A', padding: '40px 72px', flexDirection: 'column' }}>
+  <Box style={{ height: 84, flexDirection: 'column', justifyContent: 'center' }}>
+    <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#F7F4EC' }}>开发历程：从线上开题到现场展示</Text>
+    <Text style={{ fontSize: 16, color: '#94A3B8', marginTop: 6 }}>全程在赛期内完成，仓库保留完整提交记录，可供核验</Text>
+  </Box>
+  <Box style={{ flex: 1, position: 'relative', flexDirection: 'row', gap: 20, paddingTop: 30 }}>
+    <Box style={{ position: 'absolute', top: 66, left: 8, right: 8, height: 2, background: 'rgba(6,182,212,0.35)' }} />
+    <Box style={{ flex: 1, flexDirection: 'column', gap: 8 }}>
+      <Text style={{ fontSize: 28, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas' }}>10.19</Text>
+      <Box style={{ width: 14, height: 14, borderRadius: 7, background: '#06B6D4', marginTop: 2 }} />
+      <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#F7F4EC', marginTop: 6 }}>线上开题</Text>
+      <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.7 }}>看赛题与规则，确认方向「碎片化沟通中的订单与任务协同」，完成组队与模块分工。</Text>
+    </Box>
+    <Box style={{ flex: 1, flexDirection: 'column', gap: 8 }}>
+      <Text style={{ fontSize: 28, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas' }}>10.23</Text>
+      <Box style={{ width: 14, height: 14, borderRadius: 7, background: '#06B6D4', marginTop: 2 }} />
+      <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#F7F4EC', marginTop: 6 }}>线上开发</Text>
+      <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.7 }}>落地核心链路：群聊抽取 → 缺失 / 冲突判定 → 协同台账；首版可运行，含网页演示。</Text>
+    </Box>
+    <Box style={{ flex: 1, flexDirection: 'column', gap: 8 }}>
+      <Text style={{ fontSize: 28, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas' }}>10.24</Text>
+      <Box style={{ width: 14, height: 14, borderRadius: 7, background: '#06B6D4', marginTop: 2 }} />
+      <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#F7F4EC', marginTop: 6 }}>现场集中开发</Text>
+      <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.7 }}>联调网页端与四维筛选，跑五套回归、修复缺陷；17:00 前完成可运行包与材料提交。</Text>
+    </Box>
+    <Box style={{ flex: 1, flexDirection: 'column', gap: 8 }}>
+      <Text style={{ fontSize: 28, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas' }}>10.25</Text>
+      <Box style={{ width: 14, height: 14, borderRadius: 7, background: '#06B6D4', marginTop: 2 }} />
+      <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#F7F4EC', marginTop: 6 }}>展示与路演</Text>
+      <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.7 }}>园博园现场展示与试玩，接受评委与企业代表追问；若入围，参加下午决赛路演。</Text>
+    </Box>
+  </Box>
+  <Box style={{ height: 92, background: 'rgba(247,244,236,0.05)', borderRadius: 10, padding: '0 22px', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+    <Box style={{ flexDirection: 'column', gap: 3 }}>
+      <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>开发记录可核验</Text>
+      <Text style={{ fontSize: 12, color: '#94A3B8' }}>GitHub 提交 / PR #1–#38 ｜ 模块说明 ｜ 测试报告 ｜ 缺陷台账</Text>
+    </Box>
+    <Box style={{ flexDirection: 'column', gap: 3, alignItems: 'flex-end' }}>
+      <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>线上与现场分工</Text>
+      <Text style={{ fontSize: 12, color: '#94A3B8' }}>线上：抽取 / 判定 / 台账 / 测试 ｜ 现场：前端联调 / 修复 / 打包</Text>
+    </Box>
+  </Box>
+  <Box style={{ height: 36, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>瓯单通 · 企业智能体赛道 · 队伍 XO</Text>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>09 / 10</Text>
+  </Box>
+</Slide>

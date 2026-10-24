@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>瓯单通 · 启动导航</title>
+<style>
+  :root{
+    --navy:#0B2545; --navy2:#123A63; --teal:#2BD9B4; --sky:#57C7E3; --ink:#E8F1F8;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    min-height:100vh; background:linear-gradient(160deg,var(--navy) 0%,var(--navy2) 60%,#0E2C4E 100%);
+    color:var(--ink); font-family:"Microsoft YaHei","PingFang SC","Hiragino Sans GB",system-ui,sans-serif;
+    display:flex; align-items:center; justify-content:center; padding:32px;
+  }
+  .card{
+    width:100%; max-width:660px; background:rgba(255,255,255,.055);
+    border:1px solid rgba(87,199,227,.28); border-radius:18px; padding:34px 34px 28px;
+    box-shadow:0 18px 50px rgba(0,0,0,.35);
+  }
+  .brand{display:flex;align-items:baseline;gap:12px;margin-bottom:6px}
+  .brand h1{font-size:30px;letter-spacing:2px}
+  .brand .en{font-size:13px;color:var(--teal);letter-spacing:3px;text-transform:uppercase}
+  .tag{display:inline-block;margin:10px 0 20px;font-size:12px;color:var(--sky);
+    border:1px solid rgba(87,199,227,.4);border-radius:999px;padding:4px 12px}
+
+  .status{display:flex;align-items:center;gap:10px;font-size:14px;
+    background:rgba(0,0,0,.25);border-radius:10px;padding:12px 16px;margin-bottom:4px}
+  .dot{width:10px;height:10px;border-radius:50%;background:#8FA6B8;flex:0 0 auto}
+  .status.ready .dot{background:var(--teal);box-shadow:0 0 0 4px rgba(43,217,180,.18)}
+  .status.ready{color:var(--teal)}
+  .status.wait .dot{animation:pulse 1.2s infinite}
+  @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+
+  .btn{
+    display:block;text-align:center;text-decoration:none;font-size:17px;font-weight:700;
+    color:#04231E;background:linear-gradient(90deg,var(--teal),var(--sky));
+    border-radius:12px;padding:15px 20px;margin:18px 0 8px;
+    box-shadow:0 8px 24px rgba(43,217,180,.28); transition:filter .15s;
+  }
+  .btn.idle{background:rgba(255,255,255,.14);color:#DCEAF5;box-shadow:none}
+  .btn:hover{filter:brightness(1.08)}
+  .hint{font-size:13px;color:#A9C4DA;text-align:center;line-height:1.7}
+
+  .steps{margin-top:24px;border-top:1px solid rgba(255,255,255,.12);padding-top:20px}
+  .steps h2{font-size:14px;color:var(--teal);margin-bottom:10px;letter-spacing:1px}
+  ol{margin-left:20px;font-size:13.5px;line-height:2;color:#CBDDEB}
+  code{background:rgba(0,0,0,.32);padding:2px 7px;border-radius:5px;
+    font-family:Consolas,Monaco,monospace;color:var(--teal)}
+  .warn{margin-top:18px;font-size:12.5px;color:#8FB3CC;line-height:1.85;
+    background:rgba(0,0,0,.2);border-left:3px solid var(--sky);padding:10px 14px;border-radius:0 8px 8px 0}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">
+      <h1>瓯 单 通</h1><span class="en">Ou Dan Tong</span>
+    </div>
+    <div class="tag">AI＋企业智能体赛道 ｜ 队伍 XO ｜ 碎片化沟通中的订单与任务协同</div>
+
+    <div class="status wait" id="st"><span class="dot"></span><span id="stx">正在检测本地服务…</span></div>
+
+    <a class="btn idle" id="go" href="http://127.0.0.1:8000">进入 瓯单通 →</a>
+    <p class="hint" id="tip">服务未启动时点这里会打不开，请先按下方的步骤启动。</p>
+
+    <div class="steps">
+      <h2>首次使用：两步启动</h2>
+      <ol>
+        <li>双击 <strong>启动_Windows.bat</strong>（Mac/Linux 用 <strong>启动_Mac_Linux.sh</strong>）</li>
+        <li>保持弹出的黑色窗口<strong>不要关闭</strong>（关闭＝停服），再点上方按钮</li>
+        <li>也可直接在浏览器访问 <code>http://127.0.0.1:8000</code></li>
+      </ol>
+      <div class="warn">
+        ⚠️ 系统界面由本地服务提供，<strong>不能直接双击 ou_dan_tong\static\index.html</strong>，否则提示"未能连接智能体"。<br>
+        🔧 提示「端口被占用」：先用 <code>set OU_PORT=9000</code> 再启动，访问时用 9000 端口。<br>
+        🐢 解析很慢 / 超时：删除 <code>ou_dan_tong\.env</code> 后重启，即回到秒回的模拟模式。<br>
+        ❓ 黑窗口一闪而过：右键 bat →「以管理员身份运行」，或留意窗口里的红色报错文字。
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  var URL_ = "http://127.0.0.1:8000";
+  var st = document.getElementById("st"), stx = document.getElementById("stx");
+  var go = document.getElementById("go"),  tip = document.getElementById("tip");
+  var entered = false;
+
+  function setReady(ok){
+    if (ok){
+      st.className = "status ready";
+      stx.textContent = "本地服务已就绪，可以进入了";
+      go.className = "btn";
+      tip.textContent = "点击下方按钮即可进入（本页可关闭）。";
+      // 只有确认服务在跑才自动进入，绝不跳到打不开的地址
+      if (!entered){ entered = true; setTimeout(function(){ location.href = URL_; }, 1200); }
+    } else {
+      st.className = "status wait";
+      stx.textContent = "未检测到本地服务 — 请先运行「启动_Windows.bat」";
+      go.className = "btn idle";
+      tip.textContent = "服务未启动时点这里会打不开，请先按下方的步骤启动。";
+    }
+  }
+
+  function probe(){
+    var done = false;
+    var t = setTimeout(function(){ if(!done){ done = true; setReady(false);} }, 2500);
+    try{
+      fetch(URL_ + "/", {mode:"no-cors", cache:"no-store"})
+        .then(function(){ if(!done){ done=true; clearTimeout(t); setReady(true);} })
+        .catch(function(){ if(!done){ done=true; clearTimeout(t); setReady(false);} });
+    }catch(e){ clearTimeout(t); setReady(false); }
+  }
+
+  setReady(false);
+  probe();
+  setInterval(probe, 3000);
+})();
+</script>
+</body>
+</html>

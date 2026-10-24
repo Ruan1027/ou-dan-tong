@@ -1,0 +1,50 @@
+<Slide style={{ width: 1280, height: 720, background: '#0F172A', padding: '40px 72px', flexDirection: 'column' }}>
+  <Box style={{ height: 84, flexDirection: 'column', justifyContent: 'center' }}>
+    <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#F7F4EC' }}>技术实现：五层架构，判定全部可解释</Text>
+    <Text style={{ fontSize: 16, color: '#94A3B8', marginTop: 6 }}>LLM 只做「把话抽成字段」，剩下的校验、状态、话术全部走本地规则</Text>
+  </Box>
+  <Box style={{ flex: 1, flexDirection: 'row', gap: 36 }}>
+    <Box style={{ width: 452, flexDirection: 'column', gap: 8, justifyContent: 'center' }}>
+      <Box style={{ height: 84, background: 'rgba(59,130,246,0.14)', border: '1px solid rgba(59,130,246,0.45)', borderRadius: 8, padding: '0 18px', flexDirection: 'column', justifyContent: 'center', gap: 3 }}>
+        <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#F7F4EC' }}>① 接入层</Text>
+        <Text style={{ fontSize: 12, color: '#94A3B8' }}>web_app.py · static/index.html — HTTP 服务 + 单页网页</Text>
+      </Box>
+      <Box style={{ height: 84, background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.38)', borderRadius: 8, padding: '0 18px', flexDirection: 'column', justifyContent: 'center', gap: 3 }}>
+        <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#F7F4EC' }}>② 编排层</Text>
+        <Text style={{ fontSize: 12, color: '#94A3B8' }}>agent.py — 解析入库 / 查询 / 简报，串起抽取与判定</Text>
+      </Box>
+      <Box style={{ height: 84, background: 'rgba(6,182,212,0.12)', border: '1px solid rgba(6,182,212,0.40)', borderRadius: 8, padding: '0 18px', flexDirection: 'column', justifyContent: 'center', gap: 3 }}>
+        <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#F7F4EC' }}>③ 抽取层</Text>
+        <Text style={{ fontSize: 12, color: '#94A3B8' }}>extractor.py · llm.py · prompts.py — LLM 结构化抽取</Text>
+      </Box>
+      <Box style={{ height: 84, background: 'rgba(6,182,212,0.12)', border: '1px solid rgba(6,182,212,0.40)', borderRadius: 8, padding: '0 18px', flexDirection: 'column', justifyContent: 'center', gap: 3 }}>
+        <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#F7F4EC' }}>④ 判定层</Text>
+        <Text style={{ fontSize: 12, color: '#94A3B8' }}>validator.py · contracts.py — 缺失 / 冲突 / 异常 分级</Text>
+      </Box>
+      <Box style={{ height: 84, background: 'rgba(59,130,246,0.14)', border: '1px solid rgba(59,130,246,0.45)', borderRadius: 8, padding: '0 18px', flexDirection: 'column', justifyContent: 'center', gap: 3 }}>
+        <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#F7F4EC' }}>⑤ 存储层</Text>
+        <Text style={{ fontSize: 12, color: '#94A3B8' }}>store.py — orders.json · 状态机 · 分批交期 · 履历</Text>
+      </Box>
+    </Box>
+    <Box style={{ flex: 1, flexDirection: 'column', gap: 14, justifyContent: 'center' }}>
+      <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#06B6D4' }}>三个关键设计</Text>
+      <Box style={{ background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: 16, flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#F7F4EC' }}>LLM 只负责抽取</Text>
+        <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.6 }}>模型只输出结构化字段；是否缺失、是否冲突、状态怎么变，全由本地规则判定，结果可解释、可回归。</Text>
+      </Box>
+      <Box style={{ background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: 16, flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#F7F4EC' }}>契约统一口径</Text>
+        <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.6 }}>有效交期、6 态状态机、追加单 vs 改单，统一由 contracts.py 定义，避免各处各算一套。</Text>
+      </Box>
+      <Box style={{ background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: 16, flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#F7F4EC' }}>可插拔 · 零依赖</Text>
+        <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.6 }}>仅用 Python 标准库即可运行；LLM 可接任意 OpenAI 兼容端点，无 Key 时自动降级为模拟模式。</Text>
+      </Box>
+      <Text style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>Python 3.10+ ｜ 标准库 ｜ DeepSeek-V4.1-Flash（硅基流动）</Text>
+    </Box>
+  </Box>
+  <Box style={{ height: 36, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>瓯单通 · 企业智能体赛道 · 队伍 XO</Text>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>05 / 10</Text>
+  </Box>
+</Slide>

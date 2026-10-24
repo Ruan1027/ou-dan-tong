@@ -1,0 +1,62 @@
+<Slide style={{ width: 1280, height: 720, background: '#0F172A', padding: '40px 72px', flexDirection: 'column' }}>
+  <Box style={{ height: 84, flexDirection: 'column', justifyContent: 'center' }}>
+    <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#F7F4EC' }}>已经完成什么：六模块 + 五套测试全绿</Text>
+    <Text style={{ fontSize: 16, color: '#94A3B8', marginTop: 6 }}>不是「差不多能跑」，而是每次改动都能一键回归、逐条断言</Text>
+  </Box>
+  <Box style={{ flexDirection: 'row', gap: 16 }}>
+    <Box style={{ flex: 1, height: 188, background: 'rgba(6,182,212,0.10)', border: '1px solid rgba(6,182,212,0.35)', borderRadius: 10, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+      <Text style={{ fontSize: 66, fontWeight: 'bold', color: '#F7F4EC', fontFamily: 'Consolas', lineHeight: 1 }}>154</Text>
+      <Text style={{ fontSize: 14, color: '#67E8F9' }}>pipeline 断言</Text>
+    </Box>
+    <Box style={{ flex: 1, height: 188, background: 'rgba(247,244,236,0.05)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 10, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+      <Text style={{ fontSize: 66, fontWeight: 'bold', color: '#F7F4EC', fontFamily: 'Consolas', lineHeight: 1 }}>30</Text>
+      <Text style={{ fontSize: 14, color: '#94A3B8' }}>场景走查轮次</Text>
+    </Box>
+    <Box style={{ flex: 1, height: 188, background: 'rgba(247,244,236,0.05)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 10, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+      <Text style={{ fontSize: 66, fontWeight: 'bold', color: '#F7F4EC', fontFamily: 'Consolas', lineHeight: 1 }}>14</Text>
+      <Text style={{ fontSize: 14, color: '#94A3B8' }}>历史缺陷全修复</Text>
+    </Box>
+    <Box style={{ flex: 1, height: 188, background: 'rgba(247,244,236,0.05)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 10, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+      <Text style={{ fontSize: 66, fontWeight: 'bold', color: '#F7F4EC', fontFamily: 'Consolas', lineHeight: 1 }}>100</Text>
+      <Text style={{ fontSize: 14, color: '#94A3B8' }}>真实模式回归项</Text>
+    </Box>
+    <Box style={{ flex: 1, height: 188, background: 'rgba(247,244,236,0.05)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 10, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+      <Text style={{ fontSize: 66, fontWeight: 'bold', color: '#F7F4EC', fontFamily: 'Consolas', lineHeight: 1 }}>22</Text>
+      <Text style={{ fontSize: 14, color: '#94A3B8' }}>端到端验收项</Text>
+    </Box>
+  </Box>
+  <Box style={{ flex: 1, marginTop: 22, flexDirection: 'column', gap: 14 }}>
+    <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#06B6D4' }}>六个模块，对应六个真实环节</Text>
+    <Box style={{ flexDirection: 'row', gap: 12 }}>
+      <Box style={{ flex: 1, background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 12px', flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>模块一 · 抽取</Text>
+        <Text style={{ fontSize: 12, color: '#94A3B8' }}>群聊 → 结构化字段</Text>
+      </Box>
+      <Box style={{ flex: 1, background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 12px', flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>模块二 · 判定</Text>
+        <Text style={{ fontSize: 12, color: '#94A3B8' }}>缺失 / 冲突 / 异常</Text>
+      </Box>
+      <Box style={{ flex: 1, background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 12px', flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>模块三 · 台账</Text>
+        <Text style={{ fontSize: 12, color: '#94A3B8' }}>状态机 / 分批 / 履历</Text>
+      </Box>
+      <Box style={{ flex: 1, background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 12px', flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>模块四 · 查询简报</Text>
+        <Text style={{ fontSize: 12, color: '#94A3B8' }}>查单 / 今日简报</Text>
+      </Box>
+      <Box style={{ flex: 1, background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 12px', flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>模块五 · 测试</Text>
+        <Text style={{ fontSize: 12, color: '#94A3B8' }}>五套回归 + 缺陷台账</Text>
+      </Box>
+      <Box style={{ flex: 1, background: 'rgba(247,244,236,0.05)', borderRadius: 8, padding: '14px 12px', flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#F7F4EC' }}>模块六 · 网页</Text>
+        <Text style={{ fontSize: 12, color: '#94A3B8' }}>沟通页 / 台账 / 筛选</Text>
+      </Box>
+    </Box>
+    <Text style={{ fontSize: 13, color: '#64748B', marginTop: 'auto' }}>五套测试覆盖「抽取 → 判定 → 台账 → 真实模式 → 端到端」，每次改动都跑一遍；缺陷台账 14 项全部修复并留存回归守卫。</Text>
+  </Box>
+  <Box style={{ height: 36, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>瓯单通 · 企业智能体赛道 · 队伍 XO</Text>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>06 / 10</Text>
+  </Box>
+</Slide>

@@ -1,0 +1,48 @@
+<Slide style={{ width: 1280, height: 720, background: '#0F172A', padding: '40px 72px', flexDirection: 'column' }}>
+  <Box style={{ height: 84, flexDirection: 'column', justifyContent: 'center' }}>
+    <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#F7F4EC' }}>微信群接单跟单，卡在四个地方</Text>
+    <Text style={{ fontSize: 16, color: '#94A3B8', marginTop: 6 }}>温州中小制造/贸易企业的真实日常：没有 ERP，订单与交期全散在聊天记录里</Text>
+  </Box>
+  <Box style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 20 }}>
+    <Box style={{ width: 558, height: 248, background: 'rgba(247,244,236,0.06)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 12, padding: 22, flexDirection: 'column', gap: 8 }}>
+      <Box style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <Text style={{ fontSize: 30, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas' }}>01</Text>
+        <Text style={{ fontSize: 21, fontWeight: 'bold', color: '#F7F4EC' }}>漏单</Text>
+      </Box>
+      <Text style={{ fontSize: 15, color: '#94A3B8', lineHeight: 1.65 }}>客户在群里说「再帮我排上一批」，消息几秒就被刷走；没人当场把它落成一张单。等交付那天核对，才发现这一笔从头到尾没人跟。</Text>
+      <Text style={{ fontSize: 14, color: '#06B6D4' }}>→ 交付少货、客户流失</Text>
+      <Text style={{ fontSize: 13, color: '#64748B', marginTop: 'auto', fontStyle: 'italic' }}>「再帮我排上一批，我这边急」</Text>
+    </Box>
+    <Box style={{ width: 558, height: 248, background: 'rgba(247,244,236,0.06)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 12, padding: 22, flexDirection: 'column', gap: 8 }}>
+      <Box style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <Text style={{ fontSize: 30, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas' }}>02</Text>
+        <Text style={{ fontSize: 21, fontWeight: 'bold', color: '#F7F4EC' }}>错单</Text>
+      </Box>
+      <Text style={{ fontSize: 15, color: '#94A3B8', lineHeight: 1.65 }}>改数量、改交期全靠口头，几个人各记各的；台账和小票对不上。越改越乱，最后谁也不敢确定哪个数字才是准的。</Text>
+      <Text style={{ fontSize: 14, color: '#06B6D4' }}>→ 返工、对账扯皮</Text>
+      <Text style={{ fontSize: 13, color: '#64748B', marginTop: 'auto', fontStyle: 'italic' }}>「不是早就改成 80 个了吗？」</Text>
+    </Box>
+    <Box style={{ width: 558, height: 248, background: 'rgba(247,244,236,0.06)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 12, padding: 22, flexDirection: 'column', gap: 8 }}>
+      <Box style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <Text style={{ fontSize: 30, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas' }}>03</Text>
+        <Text style={{ fontSize: 21, fontWeight: 'bold', color: '#F7F4EC' }}>交期误判</Text>
+      </Box>
+      <Text style={{ fontSize: 15, color: '#94A3B8', lineHeight: 1.65 }}>谁快到期、谁已经逾期，全凭人脑记；排产靠感觉、催单靠运气。等客户催上门，才知道这单明天就该交。</Text>
+      <Text style={{ fontSize: 14, color: '#06B6D4' }}>→ 逾期赔付、信任受损</Text>
+      <Text style={{ fontSize: 13, color: '#64748B', marginTop: 'auto', fontStyle: 'italic' }}>「明天就要，你们怎么还没发？」</Text>
+    </Box>
+    <Box style={{ width: 558, height: 248, background: 'rgba(247,244,236,0.06)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 12, padding: 22, flexDirection: 'column', gap: 8 }}>
+      <Box style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <Text style={{ fontSize: 30, fontWeight: 'bold', color: '#06B6D4', fontFamily: 'Consolas' }}>04</Text>
+        <Text style={{ fontSize: 21, fontWeight: 'bold', color: '#F7F4EC' }}>查不到</Text>
+      </Box>
+      <Text style={{ fontSize: 15, color: '#94A3B8', lineHeight: 1.65 }}>老板问「李姐那批 DZ47 到哪了」，要翻半天聊天记录才能拼出个大概，还不敢保证准；决策只能靠猜。</Text>
+      <Text style={{ fontSize: 14, color: '#06B6D4' }}>→ 回复慢、决策靠猜</Text>
+      <Text style={{ fontSize: 13, color: '#64748B', marginTop: 'auto', fontStyle: 'italic' }}>「那批货到底走到哪一步了？」</Text>
+    </Box>
+  </Box>
+  <Box style={{ height: 36, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>瓯单通 · 企业智能体赛道 · 队伍 XO</Text>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>02 / 10</Text>
+  </Box>
+</Slide>

@@ -1,0 +1,46 @@
+<Slide style={{ width: 1280, height: 720, background: '#0F172A', padding: '40px 72px', flexDirection: 'column' }}>
+  <Box style={{ height: 84, flexDirection: 'column', justifyContent: 'center' }}>
+    <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#F7F4EC' }}>现场可验证：两个真实场景，输入即结果</Text>
+    <Text style={{ fontSize: 16, color: '#94A3B8', marginTop: 6 }}>下面两段对话可在网页「微信沟通」页直接复现，结果与台账一一对应</Text>
+  </Box>
+  <Box style={{ flex: 1, flexDirection: 'row', gap: 20, alignItems: 'center' }}>
+    <Box style={{ flex: 1, height: 440, background: 'rgba(247,244,236,0.05)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 12, padding: 22, flexDirection: 'column', gap: 9 }}>
+      <Text style={{ fontSize: 19, fontWeight: 'bold', color: '#F7F4EC' }}>案例 A · 改数量直接更新</Text>
+      <Box style={{ background: 'rgba(247,244,236,0.06)', borderRadius: 8, padding: 14, flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 12, color: '#64748B' }}>客户「李姐」发来</Text>
+        <Text style={{ fontSize: 15, color: '#CBD5E1' }}>「小陈，DZ47 那个加到 80 个」</Text>
+      </Box>
+      <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.65 }}>处理：抽取客户 / 产品 / 数量 → 命中在途单 ORD-02 → 校验通过 → 直接落库，并写入变更履历。</Text>
+      <Box style={{ background: 'rgba(6,182,212,0.10)', border: '1px solid rgba(6,182,212,0.32)', borderRadius: 8, padding: 14, flexDirection: 'column', gap: 5 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#67E8F9' }}>✅ 已更新订单 ORD-20261024-02</Text>
+        <Text style={{ fontSize: 13, color: '#CBD5E1' }}>数量 ×80 ｜ 单价 26 ｜ 交期 2026-10-27</Text>
+        <Text style={{ fontSize: 13, color: '#94A3B8' }}>变更履历：数量 50 → 80，依据可回溯</Text>
+      </Box>
+      <Box style={{ background: 'rgba(247,244,236,0.04)', borderRadius: 8, padding: '10px 12px' }}>
+        <Text style={{ fontSize: 12, color: '#94A3B8', lineHeight: 1.6 }}>验证：右栏台账数量即时变 80；展开「变更履历」可见「数量 50 → 80」与原文依据。</Text>
+      </Box>
+      <Text style={{ fontSize: 13, color: '#06B6D4', marginTop: 'auto' }}>→ 一条消息直接更新，不再让人二次确认</Text>
+    </Box>
+    <Box style={{ flex: 1, height: 440, background: 'rgba(247,244,236,0.05)', border: '1px solid rgba(247,244,236,0.14)', borderRadius: 12, padding: 22, flexDirection: 'column', gap: 9 }}>
+      <Text style={{ fontSize: 19, fontWeight: 'bold', color: '#F7F4EC' }}>案例 B · 追加单数量模糊也不漏</Text>
+      <Box style={{ background: 'rgba(247,244,236,0.06)', borderRadius: 8, padding: 14, flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 12, color: '#64748B' }}>客户「王总」发来</Text>
+        <Text style={{ fontSize: 15, color: '#CBD5E1' }}>「法兰那批的货再帮我排上一批，我这边急」</Text>
+      </Box>
+      <Text style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.65 }}>处理：识别为「追加」→「一批」按模糊量词判缺失 → 登记「待补充」追加单，挂到原单 ORD-01 下。</Text>
+      <Box style={{ background: 'rgba(6,182,212,0.10)', border: '1px solid rgba(6,182,212,0.32)', borderRadius: 8, padding: 14, flexDirection: 'column', gap: 5 }}>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#67E8F9' }}>🟡📥 已登记追加单（数量待补）</Text>
+        <Text style={{ fontSize: 13, color: '#CBD5E1' }}>追加自 ORD-01，原单不改动</Text>
+        <Text style={{ fontSize: 13, color: '#94A3B8' }}>台账新增一笔，汇总不漏计；补齐数量后补全该单</Text>
+      </Box>
+      <Box style={{ background: 'rgba(247,244,236,0.04)', borderRadius: 8, padding: '10px 12px' }}>
+        <Text style={{ fontSize: 12, color: '#94A3B8', lineHeight: 1.6 }}>验证：台账多出一笔「待补充」追加单，订单总数 +1；补齐数量后自动转正，不重复建单。</Text>
+      </Box>
+      <Text style={{ fontSize: 13, color: '#06B6D4', marginTop: 'auto' }}>→ 客户信息缺失、数量说不清，也不丢单</Text>
+    </Box>
+  </Box>
+  <Box style={{ height: 36, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>瓯单通 · 企业智能体赛道 · 队伍 XO</Text>
+    <Text style={{ fontSize: 14, color: '#64748B' }}>07 / 10</Text>
+  </Box>
+</Slide>

@@ -441,6 +441,71 @@ def test_pipeline():
     ck.ok(_r18c["mode"] != "handoff",
           "T18 含查询词的消息不应误判为转人工", _r18c.get("mode"))
 
+    # ---- T19 信息缺失多轮消歧（2026-10-24 应队长需求）----
+    # 客户信息缺失时逐个拿匹配订单问「是否是这个订单」：
+    # 回「是」→给更新后订单；回「否」→给下一个；全部否→转人工。
+    ck.section("T19 信息缺失多轮消歧：逐个询问→是给订单/否下一个/全否转人工")
+    from agent import handle_message as _hm, reset_session_ctx as _rsc
+    from prompts import disambig_card_text, HUMAN_HANDOFF as _HH
+    s19 = Store(); s19.reset()
+    # 预置3个王总的订单 + 1个李姐的（不应被消歧命中）
+    s19.add_order({"order_id":"D-01","customer":"王总","product":"法兰盘","qty":1000,
+                    "unit_price":"18.5","delivery_date":"2026-10-28","status":"已确认",
+                    "source_excerpt":"王总 法兰盘 1000个"})
+    s19.add_order({"order_id":"D-02","customer":"王总","product":"电机壳","qty":200,
+                    "unit_price":"32","delivery_date":"2026-11-05","status":"生产中",
+                    "source_excerpt":"王总 电机壳 200个"})
+    s19.add_order({"order_id":"D-03","customer":"王总","product":"齿轮","qty":50,
+                    "unit_price":"8","delivery_date":"2026-11-10","status":"沟通中",
+                    "source_excerpt":"王总 齿轮 50个"})
+    s19.add_order({"order_id":"D-04","customer":"李姐","product":"断路器","qty":80,
+                    "unit_price":"26","delivery_date":"2026-10-27","status":"已确认",
+                    "source_excerpt":"李姐 断路器 80个"})
+    _SK19 = "test_t19"
+    # 第1轮：触发消歧（客户名王总，缺产品/数量/交期）
+    _r19a = _hm("王总的货帮我改下", s19, mock=[{"type":"order","customer":"王总",
+                "product":None,"qty":None,"unit_price":None,"delivery_date":None,
+                "status_hint":None,"sample_flag":"无","source_excerpt":"王总的货帮我改下"}],
+                sender="王总", session_key=_SK19)
+    ck.ok(_r19a["mode"] == "disambig_start", "T19 第1轮应 mode=disambig_start", _r19a.get("mode"))
+    ck.ok("第 1/3" in (_r19a.get("reply") or ""), "T19 第1轮应显示第1/3个候选", (_r19a.get("reply") or "")[:80])
+    ck.ok("D-01" in (_r19a.get("reply") or ""), "T19 第1轮应展示第一个候选 D-01", (_r19a.get("reply") or "")[:80])
+    # 第2轮：回「不是」→下一个候选
+    _r19b = _hm("不是", s19, session_key=_SK19)
+    ck.ok(_r19b["mode"] == "disambig_next", "T19 第2轮应 mode=disambig_next", _r19b.get("mode"))
+    ck.ok("第 2/3" in (_r19b.get("reply") or ""), "T19 第2轮应显示第2/3个候选", (_r19b.get("reply") or "")[:80])
+    ck.ok("D-02" in (_r19b.get("reply") or ""), "T19 第2轮应展示第二个候选 D-02", (_r19b.get("reply") or "")[:80])
+    # 第3轮：回「不是」→第三个候选
+    _r19c = _hm("不对", s19, session_key=_SK19)
+    ck.ok(_r19c["mode"] == "disambig_next", "T19 第3轮应 mode=disambig_next", _r19c.get("mode"))
+    ck.ok("第 3/3" in (_r19c.get("reply") or ""), "T19 第3轮应显示第3/3个候选", (_r19c.get("reply") or "")[:80])
+    ck.ok("D-03" in (_r19c.get("reply") or ""), "T19 第3轮应展示第三个候选 D-03", (_r19c.get("reply") or "")[:80])
+    # 第4轮：回「不是」→全部否完→转人工
+    _r19d = _hm("不是", s19, session_key=_SK19)
+    ck.ok(_r19d["mode"] == "handoff", "T19 第4轮全部否完应 mode=handoff", _r19d.get("mode"))
+    ck.ok(_r19d.get("reply") == _HH, "T19 第4轮应回复转人工话术", _r19d.get("reply"))
+    # 路径B：客户回「是」→给确认的订单信息
+    _rsc(_SK19 + "b")
+    s19b = Store(); s19b.reset()
+    s19b.add_order({"order_id":"DB-01","customer":"王总","product":"法兰盘","qty":1000,
+                     "unit_price":"18.5","delivery_date":"2026-10-28","status":"已确认",
+                     "source_excerpt":"王总 法兰盘 1000个"})
+    s19b.add_order({"order_id":"DB-02","customer":"王总","product":"电机壳","qty":200,
+                     "unit_price":"32","delivery_date":"2026-11-05","status":"生产中",
+                     "source_excerpt":"王总 电机壳 200个"})
+    _hm("王总的货帮我改下", s19b, mock=[{"type":"order","customer":"王总",
+        "product":None,"qty":None,"unit_price":None,"delivery_date":None,
+        "status_hint":None,"sample_flag":"无","source_excerpt":"王总的货帮我改下"}],
+        sender="王总", session_key=_SK19 + "b")
+    _r19e = _hm("是的", s19b, session_key=_SK19 + "b")
+    ck.ok(_r19e["mode"] == "disambig_confirm", "T19 路径B 回「是」应 mode=disambig_confirm", _r19e.get("mode"))
+    ck.ok("DB-01" in (_r19e.get("reply") or ""), "T19 路径B 应展示确认的订单 DB-01", (_r19e.get("reply") or "")[:100])
+    # find_candidates 排除占位单
+    _cands = s19.find_candidates(customer="王总")
+    ck.ok(all(c["status"] != "待补充" for c in _cands), "T19 find_candidates 不应返回占位单",
+          [c["status"] for c in _cands])
+    ck.ok(len(_cands) == 3, "T19 find_candidates 应返回3个王总的在途单（排除李姐+占位单）", len(_cands))
+
     ck.report()
     print("-" * 46)
     print(briefing(store))

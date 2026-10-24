@@ -214,6 +214,23 @@ def missing_card_text(order: dict, missing_msg: str, is_new: bool = True) -> str
 HUMAN_HANDOFF = "检测到订单存在疑问，接下来将转接人工。"
 
 
+def disambig_card_text(order: dict, index: int, total: int) -> str:
+    """消歧卡片 —— 从候选订单中拿出一个问客户「是否是这个订单」。
+
+    2026-10-24 应队长需求：信息缺失时逐个拿匹配订单询问，客户说「是」给更新后订单，
+    说「否」给下一个，全部问完仍「否」→转人工。
+
+    index/total：当前是第几个候选 / 共几个（让客户知道还有几轮）。
+    """
+    lines = [f"🟡 信息缺失，请确认：以下是否是您要查询/修改的订单？（第 {index}/{total} 个匹配）"]
+    lines.append("── 订单数据 ──")
+    lines.extend(_order_fields_block(order))
+    lines.append("❓ 请回复「是」或「否」：")
+    lines.append("· 回复「是」→ 以此订单为准，我给您更新后的信息；")
+    lines.append(f"· 回复「否」→ {'继续查找其他匹配订单' if index < total else '已无更多匹配订单，将转接人工'}")
+    return "\n".join(lines)
+
+
 def conflict_card_text(existing: dict, conflict_msg: str) -> str:
     """冲突卡片 —— 先调出台账真实数据，再询问是否以此订单为准（2026-10-24 应队长需求）。
 

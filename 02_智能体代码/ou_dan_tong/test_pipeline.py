@@ -146,7 +146,7 @@ def test_pipeline():
     ck.ok(cur["qty"] == qty_before, "T7 异常不应写入负数量", cur["qty"])
 
     # ---------------- T8 缺失占位 ----------------
-    ck.section("T8 缺失占位（待补充 + 追问）")
+    ck.section("T8 缺失占位（待补充 + 追问 + 已知字段展示）")
     s2 = Store(); s2.reset()
     card, _ = parse_chat("x", s2, mock=SCENARIO_MISSING_MOCK, now=NOW)
     ck.ok("缺失" in card or "不全" in card or "🟡" in card,
@@ -157,6 +157,15 @@ def test_pipeline():
         ck.ok(ph["status"] == "待补充", "T8 占位单状态应为「待补充」", ph["status"])
         ck.ok("missing" in (ph.get("flags") or {}), "T8 台账应可见 flags.missing",
               ph.get("flags"))
+    # 2026-10-24 应队长需求：缺失卡片必须先展示已知字段再询问
+    ck.ok("订单号" in card, "T8 缺失卡片应展示订单号", card[:80])
+    ck.ok("客户" in card, "T8 缺失卡片应展示客户字段", card[:80])
+    ck.ok("产品" in card, "T8 缺失卡片应展示产品字段", card[:80])
+    ck.ok("单价" in card, "T8 缺失卡片应展示单价字段", card[:80])
+    ck.ok("数量" in card, "T8 缺失卡片应展示数量字段", card[:80])
+    ck.ok("交期" in card, "T8 缺失卡片应展示交期字段", card[:80])
+    ck.ok("改成" in card or "告诉我" in card,
+          "T8 缺失卡片应询问客户是否要更改某字段", card[-80:])
 
     # ---------------- T9 状态只进不退 ----------------
     ck.section("T9 状态机只进不退")
@@ -385,6 +394,145 @@ def test_pipeline():
     ck.ok("冲突待确认" not in (_c16 or ""), "T16 减少系动词命中后不得判冲突", (_c16 or "")[:60])
     ck.ok("减少10%" in (_r16.get("source_excerpt") or ""),
           "T16 依据必须保留「减少10%」关键词", _r16.get("source_excerpt"))
+
+    # ---- T17 冲突卡片：先展示台账真实数据再询问（2026-10-24 应队长需求）----
+    # 旧版只输出「⚠️ 冲突待确认：数值矛盾…」，客户看不到台账里记的是什么。
+    ck.section("T17 冲突卡片：先展示台账数据再询问是否以此为准")
+    s17 = Store(); s17.reset()
+    parse_chat("x", s17, mock=[_order(customer="温州机电", product="法兰盘", qty=1000,
+               unit_price="18.5", delivery_date="2026-10-28", status_hint="已确认",
+               source_excerpt="法兰盘1000个 18.5 10-28交")], now=NOW)
+    # 来单 900 且无变更动词 → 冲突
+    _c17, _ = parse_chat("x", s17, mock=[_order(customer="温州机电", product="法兰盘",
+                          qty=900, unit_price="18.5", delivery_date="2026-10-28",
+                          status_hint="已确认", source_excerpt="只发900个")], now=NOW)
+    ck.ok("冲突待确认" in (_c17 or ""), "T17 冲突应触发冲突卡片", (_c17 or "")[:60])
+    ck.ok("台账中记录" in (_c17 or ""), "T17 冲突卡片应展示「台账中记录」区块",
+          (_c17 or "")[:80])
+    ck.ok("订单号" in (_c17 or ""), "T17 冲突卡片应展示订单号", (_c17 or "")[:80])
+    ck.ok("客户" in (_c17 or ""), "T17 冲突卡片应展示客户字段", (_c17 or "")[:80])
+    ck.ok("产品" in (_c17 or ""), "T17 冲突卡片应展示产品字段", (_c17 or "")[:80])
+    ck.ok("数量" in (_c17 or ""), "T17 冲突卡片应展示数量字段", (_c17 or "")[:80])
+    ck.ok("1000" in (_c17 or ""), "T17 冲突卡片应展示台账真实数量 1000", (_c17 or "")[:80])
+    ck.ok("以我们台账" in (_c17 or "") or "以此为准" in (_c17 or ""),
+          "T17 冲突卡片应询问「数据以台账为准」", (_c17 or "")[-80:])
+
+    # ---- T18 冲突确认路由：拒绝→转人工 / 同意→确认（2026-10-24 应队长需求）----
+    ck.section("T18 冲突确认路由：拒绝→转人工 / 同意→确认")
+    from agent import handle_message, _REJECT_MARKERS, _CONFIRM_MARKERS
+    from prompts import HUMAN_HANDOFF
+    # 拒绝词表必须覆盖常见表达
+    for w in ("不是", "不对", "不同意", "错了", "搞错"):
+        ck.ok(w in _REJECT_MARKERS, f"T18 _REJECT_MARKERS 必须含「{w}」", _REJECT_MARKERS)
+    for w in ("是的", "确认", "对的", "以此为准"):
+        ck.ok(w in _CONFIRM_MARKERS, f"T18 _CONFIRM_MARKERS 必须含「{w}」", _CONFIRM_MARKERS)
+    # 受控实验：拒绝 → 转人工
+    _r18a = handle_message("不是这单，数据不对", s17)
+    ck.ok(_r18a["mode"] == "handoff", "T18 拒绝应 mode=handoff", _r18a.get("mode"))
+    ck.ok(_r18a["reply"] == HUMAN_HANDOFF,
+          "T18 拒绝应回复转人工话术", _r18a.get("reply"))
+    # 受控实验：同意 → 确认台账为准
+    _r18b = handle_message("是的，以你们为准", s17)
+    ck.ok(_r18b["mode"] == "confirm", "T18 同意应 mode=confirm", _r18b.get("mode"))
+    ck.ok("台账" in _r18b["reply"] or "为准" in _r18b["reply"],
+          "T18 同意应回复确认台账为准", _r18b.get("reply"))
+    # 边界：含查询词的消息不应被误判为转人工（如「不是吧，那单到哪了」）
+    _r18c = handle_message("不是吧，那单到哪了", s17)
+    ck.ok(_r18c["mode"] != "handoff",
+          "T18 含查询词的消息不应误判为转人工", _r18c.get("mode"))
+
+    # ---- T19 信息缺失多轮消歧（2026-10-24 应队长需求）----
+    # 客户信息缺失时逐个拿匹配订单问「是否是这个订单」：
+    # 回「是」→给更新后订单；回「否」→给下一个；全部否→转人工。
+    ck.section("T19 信息缺失多轮消歧：逐个询问→是给订单/否下一个/全否转人工")
+    from agent import handle_message as _hm, reset_session_ctx as _rsc
+    from prompts import disambig_card_text, HUMAN_HANDOFF as _HH
+    s19 = Store(); s19.reset()
+    # 预置3个王总的订单 + 1个李姐的（不应被消歧命中）
+    s19.add_order({"order_id":"D-01","customer":"王总","product":"法兰盘","qty":1000,
+                    "unit_price":"18.5","delivery_date":"2026-10-28","status":"已确认",
+                    "source_excerpt":"王总 法兰盘 1000个"})
+    s19.add_order({"order_id":"D-02","customer":"王总","product":"电机壳","qty":200,
+                    "unit_price":"32","delivery_date":"2026-11-05","status":"生产中",
+                    "source_excerpt":"王总 电机壳 200个"})
+    s19.add_order({"order_id":"D-03","customer":"王总","product":"齿轮","qty":50,
+                    "unit_price":"8","delivery_date":"2026-11-10","status":"沟通中",
+                    "source_excerpt":"王总 齿轮 50个"})
+    s19.add_order({"order_id":"D-04","customer":"李姐","product":"断路器","qty":80,
+                    "unit_price":"26","delivery_date":"2026-10-27","status":"已确认",
+                    "source_excerpt":"李姐 断路器 80个"})
+    _SK19 = "test_t19"
+    # 第1轮：触发消歧（客户名王总，缺产品/数量/交期）
+    _r19a = _hm("王总的货帮我改下", s19, mock=[{"type":"order","customer":"王总",
+                "product":None,"qty":None,"unit_price":None,"delivery_date":None,
+                "status_hint":None,"sample_flag":"无","source_excerpt":"王总的货帮我改下"}],
+                sender="王总", session_key=_SK19)
+    ck.ok(_r19a["mode"] == "disambig_start", "T19 第1轮应 mode=disambig_start", _r19a.get("mode"))
+    ck.ok("第 1/3" in (_r19a.get("reply") or ""), "T19 第1轮应显示第1/3个候选", (_r19a.get("reply") or "")[:80])
+    ck.ok("D-01" in (_r19a.get("reply") or ""), "T19 第1轮应展示第一个候选 D-01", (_r19a.get("reply") or "")[:80])
+    # 第2轮：回「不是」→下一个候选
+    _r19b = _hm("不是", s19, session_key=_SK19)
+    ck.ok(_r19b["mode"] == "disambig_next", "T19 第2轮应 mode=disambig_next", _r19b.get("mode"))
+    ck.ok("第 2/3" in (_r19b.get("reply") or ""), "T19 第2轮应显示第2/3个候选", (_r19b.get("reply") or "")[:80])
+    ck.ok("D-02" in (_r19b.get("reply") or ""), "T19 第2轮应展示第二个候选 D-02", (_r19b.get("reply") or "")[:80])
+    # 第3轮：回「不是」→第三个候选
+    _r19c = _hm("不对", s19, session_key=_SK19)
+    ck.ok(_r19c["mode"] == "disambig_next", "T19 第3轮应 mode=disambig_next", _r19c.get("mode"))
+    ck.ok("第 3/3" in (_r19c.get("reply") or ""), "T19 第3轮应显示第3/3个候选", (_r19c.get("reply") or "")[:80])
+    ck.ok("D-03" in (_r19c.get("reply") or ""), "T19 第3轮应展示第三个候选 D-03", (_r19c.get("reply") or "")[:80])
+    # 第4轮：回「不是」→全部否完→转人工
+    _r19d = _hm("不是", s19, session_key=_SK19)
+    ck.ok(_r19d["mode"] == "handoff", "T19 第4轮全部否完应 mode=handoff", _r19d.get("mode"))
+    ck.ok(_r19d.get("reply") == _HH, "T19 第4轮应回复转人工话术", _r19d.get("reply"))
+    # 路径B：客户回「是」→给确认的订单信息
+    _rsc(_SK19 + "b")
+    s19b = Store(); s19b.reset()
+    s19b.add_order({"order_id":"DB-01","customer":"王总","product":"法兰盘","qty":1000,
+                     "unit_price":"18.5","delivery_date":"2026-10-28","status":"已确认",
+                     "source_excerpt":"王总 法兰盘 1000个"})
+    s19b.add_order({"order_id":"DB-02","customer":"王总","product":"电机壳","qty":200,
+                     "unit_price":"32","delivery_date":"2026-11-05","status":"生产中",
+                     "source_excerpt":"王总 电机壳 200个"})
+    _hm("王总的货帮我改下", s19b, mock=[{"type":"order","customer":"王总",
+        "product":None,"qty":None,"unit_price":None,"delivery_date":None,
+        "status_hint":None,"sample_flag":"无","source_excerpt":"王总的货帮我改下"}],
+        sender="王总", session_key=_SK19 + "b")
+    _r19e = _hm("是的", s19b, session_key=_SK19 + "b")
+    ck.ok(_r19e["mode"] == "disambig_confirm", "T19 路径B 回「是」应 mode=disambig_confirm", _r19e.get("mode"))
+    ck.ok("DB-01" in (_r19e.get("reply") or ""), "T19 路径B 应展示确认的订单 DB-01", (_r19e.get("reply") or "")[:100])
+    # find_candidates 排除占位单
+    _cands = s19.find_candidates(customer="王总")
+    ck.ok(all(c["status"] != "待补充" for c in _cands), "T19 find_candidates 不应返回占位单",
+          [c["status"] for c in _cands])
+    ck.ok(len(_cands) == 3, "T19 find_candidates 应返回3个王总的在途单（排除李姐+占位单）", len(_cands))
+
+    # ---------------- T20 无变化卡片展示台账现值（2026-10-24 应队长需求） ----------------
+    # 场景：客户要求「加到 80 个」而台账已是 80（先前已更新过）→ 幂等 nochange。
+    # 旧版只回「数据已一致，未重复写入」，客户困惑「我要求改了为什么说无变化」。
+    # 现要求：nochange 卡片必须展示台账现值（数量/交期/状态）+ 引导语。
+    ck.section("T20 无变化卡片：展示台账现值 + 引导")
+    s20 = Store(); s20.reset()
+    parse_chat("x", s20, mock=[_order(customer="李姐（瓯越五金贸易）", product="DZ47-63 三相断路器",
+                                      qty=80, unit_price="26", delivery_date="2026-10-27",
+                                      status_hint="已确认",
+                                      source_excerpt="李姐 DZ47 80个")], now=NOW)
+    _c20, _ = parse_chat("小陈，DZ47 那个加到 80 个", s20,
+                         mock=[_order(customer="李姐（瓯越五金贸易）", product="DZ47-63 三相断路器",
+                                      qty=80, unit_price="26", delivery_date="2026-10-27",
+                                      status_hint="已确认", intent="update",
+                                      source_excerpt="小陈，DZ47 那个加到 80 个")], now=NOW)
+    ck.ok("⏸️" in _c20 and "无变化" in _c20, "T20 同值变更应走无变化卡片", _c20[:80])
+    _oid20 = next((o["order_id"] for o in s20.orders
+                   if o["customer"] == "李姐（瓯越五金贸易）"), "")
+    ck.ok(_oid20 in _c20, "T20 无变化卡片应含订单号", _c20[:120])
+    ck.ok("👤 客户：李姐（瓯越五金贸易）" in _c20, "T20 应展示台账客户", _c20[:150])
+    ck.ok("📊 数量：×80" in _c20, "T20 应展示台账当前数量 80", _c20[:200])
+    ck.ok("📅 交期：2026-10-27" in _c20, "T20 应展示台账交期", _c20[:250])
+    ck.ok("未重复写入" in _c20, "T20 应说明未重复写入的原因", _c20[-160:])
+    ck.ok("目标值" in _c20, "T20 应引导客户改成其他目标值", _c20[-120:])
+    # 语义守护：nochange 不应篡改台账
+    _r20 = next((o for o in s20.orders if o["order_id"] == _oid20), None)
+    ck.ok(_r20 is not None and _r20["qty"] == 80, "T20 无变化后台账数量应保持 80", _r20 and _r20["qty"])
 
     ck.report()
     print("-" * 46)

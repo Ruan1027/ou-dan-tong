@@ -6,7 +6,9 @@ import threading
 import time
 
 from llm import LLM
-from prompts import card_text, query_text, briefing_text, append_card_text, STATUS_ORDER
+from prompts import (card_text, query_text, briefing_text, append_card_text,
+                     missing_card_text, conflict_card_text, disambig_card_text,
+                     nochange_card_text, HUMAN_HANDOFF, STATUS_ORDER)
 from store import Store
 from validator import validate_extraction, apply_change, classify_order, classify_task
 from contracts import CheckStatus, CHANGE_VERBS, APPEND_INTENTS, effective_delivery_date
@@ -62,7 +64,10 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
             if existing is not None:
                 existing.setdefault("flags", {})["conflict"] = res.message
                 store.update_order(existing["order_id"], {}, None)
-            cards.append("⚠️ 冲突待确认：" + res.message)
+                # 2026-10-24 应队长需求：先调出台账真实数据展示，再询问是否以此为准
+                cards.append(conflict_card_text(existing, res.message))
+            else:
+                cards.append("⚠️ 冲突待确认：" + res.message)
             continue
         if res.status == CheckStatus.MISSING:
             if existing is not None:
@@ -70,8 +75,8 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
                 # （否则同客户同产品会出现两张单，台账重复计数）
                 existing.setdefault("flags", {})["missing"] = res.message
                 store.update_order(existing["order_id"], {}, None)
-                cards.append(f"🟡 信息待补充 {existing['order_id']}：" + res.message
-                             + "（台账已有该单，补齐后我直接更新，不再重复建单）")
+                # 2026-10-24 应队长需求：先展示当前订单已知字段，再询问是否更改
+                cards.append(missing_card_text(existing, res.message, is_new=False))
                 continue
             # 登记占位单，状态「待补充」，便于台账可见，待补全后正式建单
             o["order_id"] = store.next_order_id(date)
@@ -80,9 +85,8 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
             o["created_at"] = now
             o["updated_at"] = now
             store.add_order(o)
-            # 卡片必须写清「缺什么」+「在哪能查到」，否则用户无从补充
-            cards.append(f"🟡 信息不全已占位 {o['order_id']}：" + res.message
-                         + "（已记入「📊 平台汇总」台账，状态=待补充）")
+            # 2026-10-24 应队长需求：先展示已知字段，再询问是否更改
+            cards.append(missing_card_text(o, res.message, is_new=True))
             continue
         # —— 正常（ok）：新建 或 主动更新 ——
         if existing is not None:
@@ -135,7 +139,7 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
     first_new = next((i for i, (k, _) in enumerate(out) if k == "new"), None)
     for i, (kind, rec) in enumerate(out):
         if kind == "nochange":
-            cards.append(f"⏸️ 无变化：{rec['customer']}的{rec['product']} 数据已一致，未重复写入。")
+            cards.append(nochange_card_text(rec))
             continue
         if kind == "append":
             cards.append(append_card_text(rec))
@@ -170,6 +174,13 @@ def _days_to(date_str):
 _SESSION_CTX = {}      # {session_key: {"order_ids": [...], "ts": time.time()}}
 _CTX_TTL = 600         # 秒；过期即失效，指代词回退全表匹配
 _CTX_MAX = 500         # C-2：上限，防止大量一次性 session_key 常驻内存（无主动回收路径）
+
+# ---- 2026-10-24 应队长需求：信息缺失多轮消歧 ----
+# 当客户信息缺失时，逐个拿出匹配订单问「是否是这个订单」，客户回「否」就给下一个，
+# 全部问完仍「否」→转人工。需要会话级状态记录已问过的候选列表。
+# 结构：{session_key: {"candidates": [order_id, ...], "asked": [order_id, ...],
+#                       "customer": "...", "product": "...", "ts": time.time()}}
+_DISAMBIG_CTX = {}
 # C-6：补温州话常用说法（那批货 / 上一单）。刻意不加裸「那批」——「法兰那批的货」里
 # 它是量词不是指代，加了会让改单话术误触发范围锁定。
 _PRONOUNS = ("刚才那单", "刚才的单", "刚刚那单", "这一单", "那一单", "上一个单",
@@ -844,6 +855,17 @@ _BRIEFING_MARKERS = ("简报", "今天情况", "今日", "整体情况", "汇总
 _HISTORY_MARKERS = ("改过", "历史", "变更", "履历", "几次", "改了什么", "改了啥",
                     "变更记录", "变更历史", "改动", "修改记录", "怎么改的")
 
+# ---- 2026-10-24 应队长需求：冲突确认 / 转人工 ----
+# 客户看到冲突卡片后可能回复同意或拒绝：
+#   · 同意 → 以台账数据为准（不改动，下一条消息若无变更动词走 nochange）
+#   · 拒绝 → 转人工（HUMAN_HANDOFF）
+# 词表放模块级以便测试断言；放在 handle_message 局部变量会导致改了忘同步。
+_REJECT_MARKERS = ("不是", "不对", "不同意", "不确认", "不认", "错了", "搞错",
+                   "弄错", "不对吧", "不是这", "不是这单", "不一定是", "存疑",
+                   "有疑问", "有疑问", "质疑")
+_CONFIRM_MARKERS = ("是的", "确认", "对的", "没错", "是这样", "是这个", "是这单",
+                    "以此为准", "以你们为准", "以台账为准", "好的", "可以", "嗯")
+
 # ---- C-9：查询词表统一放模块级（原先散在 _query_body 里当局部变量，测试断不到，
 # 也无法和 _QUERY_MARKERS 一起维护）----
 _STATUS_KEYWORDS = {
@@ -960,6 +982,51 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str =
     if not t:
         return {"mode": "hint",
                 "reply": "把业务群聊粘贴给我，或问我「XX 那单到哪了」「出今日简报」。"}
+    # 2026-10-24 应队长需求：冲突确认 / 消歧环节的「是 / 否」识别。
+    # 消歧状态优先于通用 handoff/confirm：若 session 正在消歧，客户回「是」给更新后订单、
+    # 回「否」给下一个候选或转人工。非消歧状态才走通用 handoff/confirm。
+    _t_low = t.lower()
+    _in_disambig = session_key in _DISAMBIG_CTX
+    _is_reject = any(k in t for k in _REJECT_MARKERS) and not _looks_like_order(t) \
+            and not any(k in t for k in _QUERY_MARKERS + _BRIEFING_MARKERS)
+    _is_confirm = any(k in t for k in _CONFIRM_MARKERS) and not _looks_like_order(t) \
+            and not any(k in t for k in _QUERY_MARKERS + _BRIEFING_MARKERS)
+
+    if _in_disambig and (_is_reject or _is_confirm):
+        _ctx = _DISAMBIG_CTX[session_key]
+        _asked = _ctx.get("asked", [])
+        _customer = _ctx.get("customer")
+        _product = _ctx.get("product")
+        if _is_confirm:
+            # 客户说「是」→ 取出当前询问的订单，给更新后的订单卡片
+            _cur_id = _asked[-1] if _asked else None
+            _cur = store.get_order(_cur_id) if _cur_id else None
+            _DISAMBIG_CTX.pop(session_key, None)
+            if _cur:
+                _card = card_text(_cur, [], is_new=False)
+                return {"mode": "disambig_confirm", "reply": "好的，以下是您确认的订单信息：\n\n" + _card}
+            return {"mode": "confirm", "reply": "好的，已确认以台账记录的数据为准，不做更改。"}
+        else:
+            # 客户说「否」→ 找下一个未问过的匹配订单
+            _candidates = store.find_candidates(customer=_customer, product=_product,
+                                                 exclude_ids=_asked)
+            if _candidates:
+                _next = _candidates[0]
+                _ctx["asked"].append(_next["order_id"])
+                _total = len(_ctx.get("all_ids", []))
+                _idx = len(_ctx["asked"])
+                _card = disambig_card_text(_next, _idx, _total)
+                return {"mode": "disambig_next", "reply": _card}
+            else:
+                # 全部问完仍「否」→ 转人工
+                _DISAMBIG_CTX.pop(session_key, None)
+                return {"mode": "handoff", "reply": HUMAN_HANDOFF}
+
+    # 非消歧状态的通用 handoff/confirm（冲突确认环节）
+    if _is_reject:
+        return {"mode": "handoff", "reply": HUMAN_HANDOFF}
+    if _is_confirm:
+        return {"mode": "confirm", "reply": "好的，已确认以台账记录的数据为准，不做更改。"}
     if any(k in t for k in _BRIEFING_MARKERS):
         if force_colloquial and llm is None:
             llm = _safe_llm()          # C-1：无 Key 也要尝试改写，失败由 _colloquialize 回退
@@ -994,6 +1061,21 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str =
             return {"mode": "hint",
                     "reply": "这句话我没能识别出订单要素——请补上客户、产品、数量和交期，"
                              "或者换个问法，例如「法兰那单到哪了？」「法兰那单改过几次」。"}
+        # 2026-10-24 应队长需求：信息缺失时触发多轮消歧。
+        # 当 parse_chat 返回的卡片含缺失标记（"信息不全"或"信息待补充"），
+        # 且客户消息里至少带了一个可匹配维度（sender 或正文里的客户/产品名）时，
+        # 在台账中找匹配候选逐个询问，而非只建占位单等客户补。
+        if ("信息不全" in card or "信息待补充" in card) and sender:
+            _cands = store.find_candidates(customer=sender, product=None)
+            if _cands:
+                _DISAMBIG_CTX[session_key] = {
+                    "all_ids": [c["order_id"] for c in _cands],
+                    "asked": [_cands[0]["order_id"]],
+                    "customer": sender, "product": None,
+                    "ts": time.time(),
+                }
+                _dcard = disambig_card_text(_cands[0], 1, len(_cands))
+                return {"mode": "disambig_start", "reply": _dcard}
         return {"mode": "parse", "reply": card}
     if any(k in t for k in _QUERY_MARKERS):
         if force_colloquial and llm is None:

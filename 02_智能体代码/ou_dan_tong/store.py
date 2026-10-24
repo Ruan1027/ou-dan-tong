@@ -391,6 +391,41 @@ class Store:
                     return o
         return None
 
+    def find_candidates(self, customer: str = None, product: str = None,
+                        exclude_ids: list = None):
+        """按已知字段（客户/产品，可部分）查找所有匹配的在途订单。
+
+        2026-10-24 应队长需求：信息缺失时逐个询问客户「是否是这个订单」，
+        需要拿到候选列表而非只取第一个。exclude_ids 用于排除已问过的订单。
+
+        匹配规则（宽于 find_active，支持只给一个维度）：
+        - 客户+产品都给 → 同 find_active 的精确+模糊匹配
+        - 只给客户 → 匹配该客户的所有在途单
+        - 只给产品 → 匹配该产品的所有在途单
+        """
+        _CLOSED = ("已交付",)
+        _excl = set(exclude_ids or [])
+        results = []
+        for o in self.orders:
+            if o.get("status") in _CLOSED:
+                continue
+            # 排除占位单（待补充）：消歧只拿真实订单问客户，占位单全是「待补充」无意义
+            if o.get("status") == "待补充":
+                continue
+            if o.get("order_id") in _excl:
+                continue
+            oc, op = (o.get("customer") or "").strip(), (o.get("product") or "").strip()
+            c_match = True
+            p_match = True
+            if customer and customer.strip():
+                c_match = (oc == customer) or _fuzzy_eq(oc, customer)
+            if product and product.strip():
+                p_match = (op == product) or _fuzzy_eq(op, product)
+            # 至少有一个维度匹配（不能两个都无约束，否则返回全部）
+            if c_match and p_match and ((customer and customer.strip()) or (product and product.strip())):
+                results.append(o)
+        return results
+
     # ------------------------------------------------------------------
     # D-1 批次交期有效性解析（分批交期语义的单一解释口径）
     # ------------------------------------------------------------------

@@ -162,6 +162,120 @@ def query_text(order: dict, suggestion: str = "") -> str:
     return "\n".join(lines)
 
 
+def _order_fields_block(order: dict) -> list:
+    """订单已知字段的逐行展示（缺失/询问卡片复用）。
+
+    每个字段独占一行，缺的标「待补充」，有的如实展示 —— 让客户一眼看到
+    当前订单已有什么、缺什么，而不是只丢一句「缺XXX」。
+    """
+    def _val(key, default="待补充"):
+        v = order.get(key)
+        if v is None or v == "" or v == "?":
+            return default
+        return v
+    return [
+        f"🔖 订单号：{order.get('order_id','待生成')}",
+        f"👤 客户：{_val('customer')}",
+        f"📦 产品：{_val('product')} {order.get('spec','')}",
+        f"💰 单价：{_val('unit_price')}",
+        f"📊 数量：×{_val('qty')}",
+        f"📅 交期：{effective_delivery_date(order) or '待补充'}",
+        f"📌 状态：{order.get('status','待补充')}{_status_tail(order)}",
+    ]
+
+
+def missing_card_text(order: dict, missing_msg: str, is_new: bool = True) -> str:
+    """缺失信息卡片 —— 先展示已知字段，再询问是否按需求更改（2026-10-24 应队长需求）。
+
+    旧版只输出「🟡 信息待补充：缺XXX」，客户看不到当前订单已有什么，
+    无从判断该补哪个字段。现改为：
+      1. 先逐行展示订单号/客户/产品/单价/数量/交期/状态（缺的标「待补充」）；
+      2. 再列缺失项询问（validator 的 missing_msg 已写清缺什么）；
+      3. 提示客户：如果要改某个字段，直接说就行，我改完再发一次确认。
+
+    is_new=True 表示这是新建占位单（无在途单）；False 表示台账已有该单（追问补全）。
+    """
+    head = "🟡 信息不全已占位" if is_new else "🟡 信息待补充"
+    head += f" {order.get('order_id','')}"
+    lines = [head]
+    lines.append("── 当前订单已知信息 ──")
+    lines.extend(_order_fields_block(order))
+    lines.append("── 待补充 ──")
+    lines.append(missing_msg)
+    lines.append("💡 如果要把某个信息改成你的要求，直接告诉我，我改完再发一次确认。")
+    if is_new:
+        lines.append("（已记入台账，状态=待补充，补齐后自动转正）")
+    else:
+        lines.append("（台账已有该单，补齐后我直接更新，不再重复建单）")
+    return "\n".join(lines)
+
+
+# 转人工话术（2026-10-24 应队长需求）：客户不同意台账数据时的兜底回复。
+HUMAN_HANDOFF = "检测到订单存在疑问，接下来将转接人工。"
+
+
+def nochange_card_text(existing: dict) -> str:
+    """无变化卡片 —— 展示台账现值，说明为何没改（2026-10-24 应队长需求）。
+
+    旧版只输出「⏸️ 无变化：数据已一致，未重复写入」，客户看到会困惑：
+    「我明明要求改数量，为什么说没变化？」—— 多数是台账先前已更新成该值
+    （幂等去重），但客户看不到现值无从判断。现改为：
+      1. 逐行展示台账中这单的当前数据（数量/交期/状态等）；
+      2. 说明：您要求的数值与台账一致，所以未重复写入；
+      3. 引导：如果要改成别的数值，直接说目标值即可。
+    """
+    lines = [f"⏸️ 无变化 {existing.get('order_id','')}"]
+    lines.append("── 台账当前记录 ──")
+    lines.extend(_order_fields_block(existing))
+    lines.append("您提供的信息与台账记录一致，未重复写入。")
+    lines.append("💡 如果要改成其他数值，直接告诉我目标值即可（如「改成 100 个」）。")
+    return "\n".join(lines)
+
+
+def disambig_card_text(order: dict, index: int, total: int) -> str:
+    """消歧卡片 —— 从候选订单中拿出一个问客户「是否是这个订单」。
+
+    2026-10-24 应队长需求：信息缺失时逐个拿匹配订单询问，客户说「是」给更新后订单，
+    说「否」给下一个，全部问完仍「否」→转人工。
+
+    index/total：当前是第几个候选 / 共几个（让客户知道还有几轮）。
+    """
+    lines = [f"🟡 信息缺失，请确认：以下是否是您要查询/修改的订单？（第 {index}/{total} 个匹配）"]
+    lines.append("── 订单数据 ──")
+    lines.extend(_order_fields_block(order))
+    lines.append(f"· 回复「是」→ 以此订单为准，我给您更新后的信息；")
+    lines.append(f"· 回复「否」→ {'继续查找其他匹配订单' if index < total else '已无更多匹配订单，将转接人工'}")
+    lines.append("")
+    lines.append("请回复 是/否")
+    return "\n".join(lines)
+
+
+def conflict_card_text(existing: dict, conflict_msg: str) -> str:
+    """冲突卡片 —— 先调出台账真实数据，再询问是否以此订单为准（2026-10-24 应队长需求）。
+
+    旧版只输出「⚠️ 冲突待确认：数值矛盾…」，客户看不到台账里到底记的是什么，
+    也无法直接确认或拒绝。现改为：
+      1. 先逐行展示台账中这单的真实数据（订单号/客户/产品/单价/数量/交期/状态）；
+      2. 列出矛盾点（validator 的 conflict_msg 已写清哪个字段不一致）；
+      3. 询问客户：是否就是这个订单，数据以我们台账为准？
+      4. 提示：如果不同意，将转接人工处理。
+
+    流程上：客户回复同意 → 下一条消息带变更动词走正常更新或 nochange；
+    客户回复不同意/拒绝 → 下一条消息仍不带变更动词命中冲突 → 触发转人工。
+    """
+    lines = [f"⚠️ 冲突待确认 {existing.get('order_id','')}"]
+    lines.append("── 我们台账中记录的订单数据 ──")
+    lines.extend(_order_fields_block(existing))
+    lines.append("── 矛盾点 ──")
+    lines.append(conflict_msg)
+    lines.append("❓ 请确认：是否就是这个订单？数据以我们台账记录的为准。")
+    lines.append("· 回复「是的 / 确认」→ 以台账数据为准，不做更改；")
+    lines.append("· 回复「不是 / 不同意」→ " + HUMAN_HANDOFF)
+    lines.append("")
+    lines.append("请回复 是/否")
+    return "\n".join(lines)
+
+
 def briefing_text(stats: dict) -> str:
     today = stats.get("date", "")
     lines = [f"📋 {today} 订单协同简报",

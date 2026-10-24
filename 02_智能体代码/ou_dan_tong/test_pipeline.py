@@ -395,6 +395,52 @@ def test_pipeline():
     ck.ok("减少10%" in (_r16.get("source_excerpt") or ""),
           "T16 依据必须保留「减少10%」关键词", _r16.get("source_excerpt"))
 
+    # ---- T17 冲突卡片：先展示台账真实数据再询问（2026-10-24 应队长需求）----
+    # 旧版只输出「⚠️ 冲突待确认：数值矛盾…」，客户看不到台账里记的是什么。
+    ck.section("T17 冲突卡片：先展示台账数据再询问是否以此为准")
+    s17 = Store(); s17.reset()
+    parse_chat("x", s17, mock=[_order(customer="温州机电", product="法兰盘", qty=1000,
+               unit_price="18.5", delivery_date="2026-10-28", status_hint="已确认",
+               source_excerpt="法兰盘1000个 18.5 10-28交")], now=NOW)
+    # 来单 900 且无变更动词 → 冲突
+    _c17, _ = parse_chat("x", s17, mock=[_order(customer="温州机电", product="法兰盘",
+                          qty=900, unit_price="18.5", delivery_date="2026-10-28",
+                          status_hint="已确认", source_excerpt="只发900个")], now=NOW)
+    ck.ok("冲突待确认" in (_c17 or ""), "T17 冲突应触发冲突卡片", (_c17 or "")[:60])
+    ck.ok("台账中记录" in (_c17 or ""), "T17 冲突卡片应展示「台账中记录」区块",
+          (_c17 or "")[:80])
+    ck.ok("订单号" in (_c17 or ""), "T17 冲突卡片应展示订单号", (_c17 or "")[:80])
+    ck.ok("客户" in (_c17 or ""), "T17 冲突卡片应展示客户字段", (_c17 or "")[:80])
+    ck.ok("产品" in (_c17 or ""), "T17 冲突卡片应展示产品字段", (_c17 or "")[:80])
+    ck.ok("数量" in (_c17 or ""), "T17 冲突卡片应展示数量字段", (_c17 or "")[:80])
+    ck.ok("1000" in (_c17 or ""), "T17 冲突卡片应展示台账真实数量 1000", (_c17 or "")[:80])
+    ck.ok("以我们台账" in (_c17 or "") or "以此为准" in (_c17 or ""),
+          "T17 冲突卡片应询问「数据以台账为准」", (_c17 or "")[-80:])
+
+    # ---- T18 冲突确认路由：拒绝→转人工 / 同意→确认（2026-10-24 应队长需求）----
+    ck.section("T18 冲突确认路由：拒绝→转人工 / 同意→确认")
+    from agent import handle_message, _REJECT_MARKERS, _CONFIRM_MARKERS
+    from prompts import HUMAN_HANDOFF
+    # 拒绝词表必须覆盖常见表达
+    for w in ("不是", "不对", "不同意", "错了", "搞错"):
+        ck.ok(w in _REJECT_MARKERS, f"T18 _REJECT_MARKERS 必须含「{w}」", _REJECT_MARKERS)
+    for w in ("是的", "确认", "对的", "以此为准"):
+        ck.ok(w in _CONFIRM_MARKERS, f"T18 _CONFIRM_MARKERS 必须含「{w}」", _CONFIRM_MARKERS)
+    # 受控实验：拒绝 → 转人工
+    _r18a = handle_message("不是这单，数据不对", s17)
+    ck.ok(_r18a["mode"] == "handoff", "T18 拒绝应 mode=handoff", _r18a.get("mode"))
+    ck.ok(_r18a["reply"] == HUMAN_HANDOFF,
+          "T18 拒绝应回复转人工话术", _r18a.get("reply"))
+    # 受控实验：同意 → 确认台账为准
+    _r18b = handle_message("是的，以你们为准", s17)
+    ck.ok(_r18b["mode"] == "confirm", "T18 同意应 mode=confirm", _r18b.get("mode"))
+    ck.ok("台账" in _r18b["reply"] or "为准" in _r18b["reply"],
+          "T18 同意应回复确认台账为准", _r18b.get("reply"))
+    # 边界：含查询词的消息不应被误判为转人工（如「不是吧，那单到哪了」）
+    _r18c = handle_message("不是吧，那单到哪了", s17)
+    ck.ok(_r18c["mode"] != "handoff",
+          "T18 含查询词的消息不应误判为转人工", _r18c.get("mode"))
+
     ck.report()
     print("-" * 46)
     print(briefing(store))

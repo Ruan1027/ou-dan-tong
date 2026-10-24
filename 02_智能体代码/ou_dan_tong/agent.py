@@ -7,7 +7,8 @@ import time
 
 from llm import LLM
 from prompts import (card_text, query_text, briefing_text, append_card_text,
-                     missing_card_text, STATUS_ORDER)
+                     missing_card_text, conflict_card_text, HUMAN_HANDOFF,
+                     STATUS_ORDER)
 from store import Store
 from validator import validate_extraction, apply_change, classify_order, classify_task
 from contracts import CheckStatus, CHANGE_VERBS, APPEND_INTENTS, effective_delivery_date
@@ -63,7 +64,10 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
             if existing is not None:
                 existing.setdefault("flags", {})["conflict"] = res.message
                 store.update_order(existing["order_id"], {}, None)
-            cards.append("⚠️ 冲突待确认：" + res.message)
+                # 2026-10-24 应队长需求：先调出台账真实数据展示，再询问是否以此为准
+                cards.append(conflict_card_text(existing, res.message))
+            else:
+                cards.append("⚠️ 冲突待确认：" + res.message)
             continue
         if res.status == CheckStatus.MISSING:
             if existing is not None:
@@ -834,6 +838,17 @@ _BRIEFING_MARKERS = ("简报", "今天情况", "今日", "整体情况", "汇总
 _HISTORY_MARKERS = ("改过", "历史", "变更", "履历", "几次", "改了什么", "改了啥",
                     "变更记录", "变更历史", "改动", "修改记录", "怎么改的")
 
+# ---- 2026-10-24 应队长需求：冲突确认 / 转人工 ----
+# 客户看到冲突卡片后可能回复同意或拒绝：
+#   · 同意 → 以台账数据为准（不改动，下一条消息若无变更动词走 nochange）
+#   · 拒绝 → 转人工（HUMAN_HANDOFF）
+# 词表放模块级以便测试断言；放在 handle_message 局部变量会导致改了忘同步。
+_REJECT_MARKERS = ("不是", "不对", "不同意", "不确认", "不认", "错了", "搞错",
+                   "弄错", "不对吧", "不是这", "不是这单", "不一定是", "存疑",
+                   "有疑问", "有疑问", "质疑")
+_CONFIRM_MARKERS = ("是的", "确认", "对的", "没错", "是这样", "是这个", "是这单",
+                    "以此为准", "以你们为准", "以台账为准", "好的", "可以", "嗯")
+
 # ---- C-9：查询词表统一放模块级（原先散在 _query_body 里当局部变量，测试断不到，
 # 也无法和 _QUERY_MARKERS 一起维护）----
 _STATUS_KEYWORDS = {
@@ -950,6 +965,17 @@ def handle_message(text, store: Store, llm: LLM = None, mock=None, sender: str =
     if not t:
         return {"mode": "hint",
                 "reply": "把业务群聊粘贴给我，或问我「XX 那单到哪了」「出今日简报」。"}
+    # 2026-10-24 应队长需求：冲突确认环节的「同意 / 拒绝」识别。
+    # 上一轮若触发了冲突卡片，客户这轮的回复可能是简短的同意或拒绝，
+    # 不含订单要素也不含查询词，必须在正式意图路由之前拦截，否则会落进兜底分支
+    # 被当成订单解析。拒绝 → 转人工；同意 → 确认台账数据为准。
+    _t_low = t.lower()
+    if any(k in t for k in _REJECT_MARKERS) and not _looks_like_order(t) \
+            and not any(k in t for k in _QUERY_MARKERS + _BRIEFING_MARKERS):
+        return {"mode": "handoff", "reply": HUMAN_HANDOFF}
+    if any(k in t for k in _CONFIRM_MARKERS) and not _looks_like_order(t) \
+            and not any(k in t for k in _QUERY_MARKERS + _BRIEFING_MARKERS):
+        return {"mode": "confirm", "reply": "好的，已确认以台账记录的数据为准，不做更改。"}
     if any(k in t for k in _BRIEFING_MARKERS):
         if force_colloquial and llm is None:
             llm = _safe_llm()          # C-1：无 Key 也要尝试改写，失败由 _colloquialize 回退

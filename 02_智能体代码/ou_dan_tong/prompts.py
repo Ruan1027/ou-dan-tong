@@ -210,6 +210,34 @@ def missing_card_text(order: dict, missing_msg: str, is_new: bool = True) -> str
     return "\n".join(lines)
 
 
+# 转人工话术（2026-10-24 应队长需求）：客户不同意台账数据时的兜底回复。
+HUMAN_HANDOFF = "检测到订单存在疑问，接下来将转接人工。"
+
+
+def conflict_card_text(existing: dict, conflict_msg: str) -> str:
+    """冲突卡片 —— 先调出台账真实数据，再询问是否以此订单为准（2026-10-24 应队长需求）。
+
+    旧版只输出「⚠️ 冲突待确认：数值矛盾…」，客户看不到台账里到底记的是什么，
+    也无法直接确认或拒绝。现改为：
+      1. 先逐行展示台账中这单的真实数据（订单号/客户/产品/单价/数量/交期/状态）；
+      2. 列出矛盾点（validator 的 conflict_msg 已写清哪个字段不一致）；
+      3. 询问客户：是否就是这个订单，数据以我们台账为准？
+      4. 提示：如果不同意，将转接人工处理。
+
+    流程上：客户回复同意 → 下一条消息带变更动词走正常更新或 nochange；
+    客户回复不同意/拒绝 → 下一条消息仍不带变更动词命中冲突 → 触发转人工。
+    """
+    lines = [f"⚠️ 冲突待确认 {existing.get('order_id','')}"]
+    lines.append("── 我们台账中记录的订单数据 ──")
+    lines.extend(_order_fields_block(existing))
+    lines.append("── 矛盾点 ──")
+    lines.append(conflict_msg)
+    lines.append("❓ 请确认：是否就是这个订单？数据以我们台账记录的为准。")
+    lines.append("· 回复「是的 / 确认」→ 以台账数据为准，不做更改；")
+    lines.append("· 回复「不是 / 不同意」→ " + HUMAN_HANDOFF)
+    return "\n".join(lines)
+
+
 def briefing_text(stats: dict) -> str:
     today = stats.get("date", "")
     lines = [f"📋 {today} 订单协同简报",

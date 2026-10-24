@@ -109,7 +109,7 @@ def do_chat(text, scenario=None, sender=None, sid=None, colloquial=False):
         try:
             result = handle_message(text, _store, llm=_llm, mock=mock, sender=sender, **extra)
         except Exception as e:
-            # 大模型网关超时/抖动（词元天下实测单次 18~50s，偶发撞满 timeout）：
+            # 大模型网关超时/抖动（单次 18~50s 偶发撞满 timeout，取决于所选大模型网关）：
             # 用该场景的预置抽取结果重跑一遍，让模块二的规则判定（异常/冲突/缺失/正常）
             # 照常产出结论与台账写入，而不是甩给用户一句 TimeoutError。
             fallback = _SCENARIO_MOCKS.get(scenario) if scenario else None
@@ -119,7 +119,7 @@ def do_chat(text, scenario=None, sender=None, sid=None, colloquial=False):
                                             sender=sender, **extra)
                     result["degraded"] = True
                     result["reply"] = result["reply"] + (
-                        "\n\n⚡ 大模型网关本次响应超时（词元天下侧抖动，非本系统故障）。"
+                        "\n\n⚡ 大模型网关本次响应超时（网关侧抖动，非本系统故障）。"
                         "已由本地规则引擎即时判定，结论与台账写入均有效；"
                         "重发一次即可走真实大模型。")
                 except Exception as e2:
@@ -127,7 +127,7 @@ def do_chat(text, scenario=None, sender=None, sid=None, colloquial=False):
                               "reply": f"⚠️ 处理失败（{type(e).__name__}/{type(e2).__name__}），请稍后重试。"}
             else:
                 result = {"mode": "error",
-                          "reply": "⚠️ 大模型网关响应超时（词元天下侧抖动，非本系统故障）。"
+                          "reply": "⚠️ 大模型网关响应超时（网关侧抖动，非本系统故障）。"
                                    "可先问我「XX 那单到哪了」或「出今日简报」——"
                                    "查询与简报走本地规则引擎，不依赖大模型，能立即出结果。"}
     # C-1 显式开关的诚实反馈：没配 Key 时口语化必然回退，必须说清楚，

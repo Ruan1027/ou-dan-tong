@@ -124,8 +124,11 @@ WEB_SCENARIO_MOCKS = {
         {"type": "order", "intent": "update", "customer": "李姐（瓯越五金贸易）", "product": "DZ47-63 三相断路器",
          "qty": 80, "source_excerpt": "小陈，DZ47 那个加到 80 个"},
     ],
-    # 缺失：客户说「再帮我排上一批」——「一批」是模糊量词，数量必须按缺失处理，
-    # 且语义上是追加（在途单 ORD-01 还在），故 intent=append，交由人工确认数量后再挂到原单下
+    # 缺失：客户说「再帮我排上一批」——「一批」是模糊量词，数量必须按缺失处理。
+    # 语义上是追加（在途单还在），intent=append；数量未明确。
+    # 2026-10-24 修复漏单：旧逻辑「等人工确认数量后再挂原单」→ 此间台账没有这笔，
+    # 汇总少计一笔。现改为立即登记「待补充」追加占位单（挂原单、is_append、进台账/汇总），
+    # 数量补齐后再补全这张单，保证不漏单、不重复建单。
     "missing": [
         {"type": "order", "intent": "append", "customer": "王总（永嘉精密机械）", "product": "304法兰盘 DN80", "spec": "",
          "qty": None, "unit_price": "待报价", "delivery_date": None, "status_hint": "沟通中",

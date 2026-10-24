@@ -299,6 +299,7 @@ def conflict_card_text(existing: dict, conflict_msg: str) -> str:
     lines.append("── 矛盾点 ──")
     lines.append(conflict_msg)
     lines.append("❓ 请确认：是否就是这个订单？数据以我们台账记录的为准。")
+    lines.append("")
     lines.append("· 回复「是的 / 确认」→ 以台账数据为准，不做更改；")
     lines.append("· 回复「不是 / 不同意」→ " + HUMAN_HANDOFF)
     return "\n".join(lines)

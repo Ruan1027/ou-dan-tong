@@ -162,6 +162,54 @@ def query_text(order: dict, suggestion: str = "") -> str:
     return "\n".join(lines)
 
 
+def _order_fields_block(order: dict) -> list:
+    """订单已知字段的逐行展示（缺失/询问卡片复用）。
+
+    每个字段独占一行，缺的标「待补充」，有的如实展示 —— 让客户一眼看到
+    当前订单已有什么、缺什么，而不是只丢一句「缺XXX」。
+    """
+    def _val(key, default="待补充"):
+        v = order.get(key)
+        if v is None or v == "" or v == "?":
+            return default
+        return v
+    return [
+        f"🔖 订单号：{order.get('order_id','待生成')}",
+        f"👤 客户：{_val('customer')}",
+        f"📦 产品：{_val('product')} {order.get('spec','')}",
+        f"💰 单价：{_val('unit_price')}",
+        f"📊 数量：×{_val('qty')}",
+        f"📅 交期：{effective_delivery_date(order) or '待补充'}",
+        f"📌 状态：{order.get('status','待补充')}{_status_tail(order)}",
+    ]
+
+
+def missing_card_text(order: dict, missing_msg: str, is_new: bool = True) -> str:
+    """缺失信息卡片 —— 先展示已知字段，再询问是否按需求更改（2026-10-24 应队长需求）。
+
+    旧版只输出「🟡 信息待补充：缺XXX」，客户看不到当前订单已有什么，
+    无从判断该补哪个字段。现改为：
+      1. 先逐行展示订单号/客户/产品/单价/数量/交期/状态（缺的标「待补充」）；
+      2. 再列缺失项询问（validator 的 missing_msg 已写清缺什么）；
+      3. 提示客户：如果要改某个字段，直接说就行，我改完再发一次确认。
+
+    is_new=True 表示这是新建占位单（无在途单）；False 表示台账已有该单（追问补全）。
+    """
+    head = "🟡 信息不全已占位" if is_new else "🟡 信息待补充"
+    head += f" {order.get('order_id','')}"
+    lines = [head]
+    lines.append("── 当前订单已知信息 ──")
+    lines.extend(_order_fields_block(order))
+    lines.append("── 待补充 ──")
+    lines.append(missing_msg)
+    lines.append("💡 如果要把某个信息改成你的要求，直接告诉我，我改完再发一次确认。")
+    if is_new:
+        lines.append("（已记入台账，状态=待补充，补齐后自动转正）")
+    else:
+        lines.append("（台账已有该单，补齐后我直接更新，不再重复建单）")
+    return "\n".join(lines)
+
+
 def briefing_text(stats: dict) -> str:
     today = stats.get("date", "")
     lines = [f"📋 {today} 订单协同简报",

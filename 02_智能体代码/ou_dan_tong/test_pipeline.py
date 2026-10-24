@@ -146,7 +146,7 @@ def test_pipeline():
     ck.ok(cur["qty"] == qty_before, "T7 异常不应写入负数量", cur["qty"])
 
     # ---------------- T8 缺失占位 ----------------
-    ck.section("T8 缺失占位（待补充 + 追问）")
+    ck.section("T8 缺失占位（待补充 + 追问 + 已知字段展示）")
     s2 = Store(); s2.reset()
     card, _ = parse_chat("x", s2, mock=SCENARIO_MISSING_MOCK, now=NOW)
     ck.ok("缺失" in card or "不全" in card or "🟡" in card,
@@ -157,6 +157,15 @@ def test_pipeline():
         ck.ok(ph["status"] == "待补充", "T8 占位单状态应为「待补充」", ph["status"])
         ck.ok("missing" in (ph.get("flags") or {}), "T8 台账应可见 flags.missing",
               ph.get("flags"))
+    # 2026-10-24 应队长需求：缺失卡片必须先展示已知字段再询问
+    ck.ok("订单号" in card, "T8 缺失卡片应展示订单号", card[:80])
+    ck.ok("客户" in card, "T8 缺失卡片应展示客户字段", card[:80])
+    ck.ok("产品" in card, "T8 缺失卡片应展示产品字段", card[:80])
+    ck.ok("单价" in card, "T8 缺失卡片应展示单价字段", card[:80])
+    ck.ok("数量" in card, "T8 缺失卡片应展示数量字段", card[:80])
+    ck.ok("交期" in card, "T8 缺失卡片应展示交期字段", card[:80])
+    ck.ok("改成" in card or "告诉我" in card,
+          "T8 缺失卡片应询问客户是否要更改某字段", card[-80:])
 
     # ---------------- T9 状态只进不退 ----------------
     ck.section("T9 状态机只进不退")

@@ -6,7 +6,8 @@ import threading
 import time
 
 from llm import LLM
-from prompts import card_text, query_text, briefing_text, append_card_text, STATUS_ORDER
+from prompts import (card_text, query_text, briefing_text, append_card_text,
+                     missing_card_text, STATUS_ORDER)
 from store import Store
 from validator import validate_extraction, apply_change, classify_order, classify_task
 from contracts import CheckStatus, CHANGE_VERBS, APPEND_INTENTS, effective_delivery_date
@@ -70,8 +71,8 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
                 # （否则同客户同产品会出现两张单，台账重复计数）
                 existing.setdefault("flags", {})["missing"] = res.message
                 store.update_order(existing["order_id"], {}, None)
-                cards.append(f"🟡 信息待补充 {existing['order_id']}：" + res.message
-                             + "（台账已有该单，补齐后我直接更新，不再重复建单）")
+                # 2026-10-24 应队长需求：先展示当前订单已知字段，再询问是否更改
+                cards.append(missing_card_text(existing, res.message, is_new=False))
                 continue
             # 登记占位单，状态「待补充」，便于台账可见，待补全后正式建单
             o["order_id"] = store.next_order_id(date)
@@ -80,9 +81,8 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
             o["created_at"] = now
             o["updated_at"] = now
             store.add_order(o)
-            # 卡片必须写清「缺什么」+「在哪能查到」，否则用户无从补充
-            cards.append(f"🟡 信息不全已占位 {o['order_id']}：" + res.message
-                         + "（已记入「📊 平台汇总」台账，状态=待补充）")
+            # 2026-10-24 应队长需求：先展示已知字段，再询问是否更改
+            cards.append(missing_card_text(o, res.message, is_new=True))
             continue
         # —— 正常（ok）：新建 或 主动更新 ——
         if existing is not None:

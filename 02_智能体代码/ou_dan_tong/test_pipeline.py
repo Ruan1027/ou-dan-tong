@@ -534,6 +534,41 @@ def test_pipeline():
     _r20 = next((o for o in s20.orders if o["order_id"] == _oid20), None)
     ck.ok(_r20 is not None and _r20["qty"] == 80, "T20 无变化后台账数量应保持 80", _r20 and _r20["qty"])
 
+    # ---------------- T21 追加 + 数量模糊：登记追加占位单，不漏单（2026-10-24 修复） ----------------
+    # 场景：王总已有在途单（法兰），客户说「再帮我排上一批」（「一批」是模糊量词，qty=None，
+    # intent=append）。旧逻辑被 `_has_qty` 挡在追加分支外 → 落入「existing 存在」的 MISSING 分支，
+    # 只追问、不建单 → 这笔追加整笔丢失、汇总少计一笔（用户实测漏单 + 回复自相矛盾）。
+    # 现要求：登记「待补充」追加占位单（挂原单、is_append、进台账），台账 +1，文案不自相矛盾。
+    ck.section("T21 追加+数量模糊：登记追加占位单（防漏单）")
+    s21 = Store(); s21.reset()
+    parse_chat("x", s21, mock=[_order(customer="王总（永嘉精密机械）", product="304法兰盘 DN80",
+                                     qty=250, unit_price="18.5", delivery_date="2026-10-28",
+                                     status_hint="已确认",
+                                     source_excerpt="王总 304法兰盘 DN80 250个 18.5 10-28交")],
+               now=NOW)
+    _base21 = s21.orders[0]["order_id"]
+    _n21 = len(s21.orders)
+    _c21, _ = parse_chat("小陈，法兰那批的货再帮我排上一批，我这边急", s21,
+                         mock=[_order(customer="王总（永嘉精密机械）", product="304法兰盘 DN80",
+                                      qty=None, unit_price="待报价", delivery_date=None,
+                                      status_hint="沟通中", intent="append",
+                                      source_excerpt="小陈，法兰那批的货再帮我排上一批，我这边急")],
+                         now=NOW)
+    ck.ok(len(s21.orders) == _n21 + 1, "T21 追加+模糊数量应新增一笔（不漏单）", len(s21.orders))
+    _a21 = next((o for o in s21.orders if o.get("is_append")), None)
+    ck.ok(_a21 is not None, "T21 新单应标记 is_append", _a21)
+    if _a21:
+        ck.ok(_a21["status"] == "待补充", "T21 追加占位单状态应为「待补充」", _a21["status"])
+        ck.ok(_a21.get("parent_order_id") == _base21, "T21 追加单应挂到原单下",
+              [_a21.get("parent_order_id"), _base21])
+    ck.ok("已登记追加单" in _c21, "T21 卡片应明确「已登记追加单」", _c21[:80])
+    ck.ok("🟡" in _c21, "T21 卡片应保留 🟡（与缺失判定口径一致）", _c21[:40])
+    ck.ok("数量待补" in _c21, "T21 卡片应说明数量待补", _c21[:120])
+    ck.ok(_base21 in _c21, "T21 卡片应注明追加自哪一单", _c21[:140])
+    # 语义守护：本单数量未知时，不能把原单既有数量（250）当作「本单已知」展示，
+    # 否则又会出现「已知250却说数量缺失」的自相矛盾。
+    ck.ok("×250" not in _c21, "T21 卡片不应把原单数量当本单已知值（防文案矛盾）", _c21[:200])
+
     ck.report()
     print("-" * 46)
     print(briefing(store))

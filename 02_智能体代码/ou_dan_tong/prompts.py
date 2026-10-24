@@ -210,6 +210,29 @@ def missing_card_text(order: dict, missing_msg: str, is_new: bool = True) -> str
     return "\n".join(lines)
 
 
+def append_pending_card_text(order: dict, missing_msg: str) -> str:
+    """追加占位单卡片 —— 已识别为「追加」，但数量未明确（模糊量词「一批」/缺失）。
+
+    与 missing_card_text 的区别：标题明确这是**新追加的一笔**（挂原单下、原单不改动），
+    而且已经真实登记进台账/汇总（不会漏单），只是数量待补；补齐后**补全这张单**，
+    不会再另建一张（避免重复计数）。
+
+    2026-10-24 修复漏单：旧逻辑在「追加 + 数量模糊」时只追问 existing、不建单，
+    导致这笔追加整笔丢失、汇总少计一笔（用户实测：王总法兰"再排一批"未进汇总）。
+    卡片保留 🟡 前缀，与 missing 判定口径一致。
+    """
+    pid = order.get("parent_order_id") or ""
+    head = f"🟡📥 已登记追加单 {order.get('order_id','')}（数量待补）"
+    head += f"（追加自 {pid}，原单不改动）" if pid else ""
+    lines = [head, "── 本单已知信息 ──"]
+    lines.extend(_order_fields_block(order))
+    lines.append("── 待补充 ──")
+    lines.append(missing_msg or "数量未明确，请补充具体件数。")
+    lines.append("💡 补充数量（和交期/单价）后，我直接补全这张追加单，不再重复建单。")
+    lines.append("（这笔已记入台账/汇总，原单数量不受影响）")
+    return "\n".join(lines)
+
+
 # 转人工话术（2026-10-24 应队长需求）：客户不同意台账数据时的兜底回复。
 HUMAN_HANDOFF = "检测到订单存在疑问，接下来将转接人工。"
 

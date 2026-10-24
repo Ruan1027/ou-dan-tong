@@ -8,9 +8,11 @@ import time
 from llm import LLM
 from prompts import (card_text, query_text, briefing_text, append_card_text,
                      missing_card_text, conflict_card_text, disambig_card_text,
-                     nochange_card_text, HUMAN_HANDOFF, STATUS_ORDER)
+                     nochange_card_text, append_pending_card_text,
+                     HUMAN_HANDOFF, STATUS_ORDER)
 from store import Store
-from validator import validate_extraction, apply_change, classify_order, classify_task
+from validator import (validate_extraction, apply_change, classify_order, classify_task,
+                       _missing_message)
 from contracts import CheckStatus, CHANGE_VERBS, APPEND_INTENTS, effective_delivery_date
 from extractor import extract
 
@@ -50,15 +52,27 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
         # 若放任冲突分支先跑，每一笔正常追加都会被判「数值矛盾」拦掉。
         # 命中单一定未交付完成（find_active 已排除 已交付/已取消），
         # 已交付完的会走下面 existing is None 的新建路径。
-        if existing is not None and _has_qty(o) and _is_append(o, chat_text):
+        if existing is not None and _is_append(o, chat_text):
             o["order_id"] = store.next_order_id(date)
             o["parent_order_id"] = existing["order_id"]
             o["is_append"] = True
-            o.setdefault("status", "沟通中")
             o["created_at"] = now
             o["updated_at"] = now
-            store.add_order(o)
-            out.append(("append", o))
+            if _has_qty(o):
+                o.setdefault("status", "沟通中")
+                store.add_order(o)
+                out.append(("append", o))
+            else:
+                # 2026-10-24 修复漏单：追加意图已明确，但数量是模糊量词（「一批」）或缺失。
+                # 旧逻辑被 `_has_qty` 挡在追加分支之外 → 落入下方「existing 存在」的 MISSING
+                # 分支只追问、不建单 → 这笔追加整笔丢失、汇总少计一笔（用户实测：王总法兰
+                # 「再排一批」未进汇总）。现改为登记「待补充」追加占位单：挂 parent、标 is_append、
+                # 写入台账，数量补齐后再补全这张单，保证台账/汇总不漏单、不重复计数。
+                o["status"] = "待补充"
+                _miss = _missing_message(o, chat_text)  # 不传 existing，避免"疑似追加"尾注
+                o.setdefault("flags", {})["missing"] = _miss
+                store.add_order(o)
+                out.append(("append_pending", o))
             continue
         if res.status == CheckStatus.CONFLICT:
             if existing is not None:
@@ -143,6 +157,10 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
             continue
         if kind == "append":
             cards.append(append_card_text(rec))
+            continue
+        if kind == "append_pending":
+            cards.append(append_pending_card_text(
+                rec, (rec.get("flags") or {}).get("missing") or ""))
             continue
         show_tasks = new_tasks if i == first_new else []
         cards.append(card_text(rec, show_tasks, kind == "new"))
@@ -925,18 +943,31 @@ def _is_append(o: dict, raw_text: str = None) -> bool:
     - 追加 = 在原单之外再要一笔（「再走一批 / 再排一批 / 追加 / 再加」）→ 新开一条挂到原单下；
     - 更新 = 改原单本身（「改成 / 加到 / 调整为」）→ 覆盖原单字段。
 
-    判定顺序：LLM 抽的 intent 是权威，明确表态就照办；只有 intent 缺失时才用关键词兜底。
-    兜底只查 APPEND_INTENTS，**不查 CHANGE_VERBS** —— 「加」同时出现在两边
-    （「再加 200 个」是追加，「数量加到 6000」是更新），靠「先排除变更动词」区分会把
-    追加误杀成更新，实测已踩过。
+    判定顺序（2026-10-24 修复漏单后）：
+    - intent=append → 追加（权威）；
+    - intent=update → 改原单（权威，照办）；
+    - intent=new 或缺失 → 真实模型普遍把「再排一批」误判成新单，**继续用追加信号纠正**：
+      APPEND_INTENTS 关键词 + 「再/另」后 6 字内出现「排」的口语正则。真正的首单
+      不会带「再排/再走/再来」这类信号，故不会误伤。
+    兜底不查 CHANGE_VERBS —— 「加」同时出现在两边（「再加 200 个」vs「加到 6000」）。
     """
     intent = (o.get("intent") or "").strip().lower()
     if intent == "append":
         return True
-    if intent in ("update", "new"):
+    if intent == "update":
+        # 明确「改成/加到/调整为」= 改原单本身，信任 LLM，不做追加改写。
         return False
+    # intent == "new" 或缺失：不能像旧版那样在 new 上直接 return False —— 真实模型
+    # 普遍把「再帮我排上一批」抽成 intent=new（当成新单），直接放行会让这笔追加落入
+    # 「existing 存在」的 MISSING 分支只追问、不建单 → 台账/汇总少计一笔（用户实测漏单）。
     text = (o.get("source_excerpt") or "") + " " + (raw_text or "")
-    return any(k in text for k in APPEND_INTENTS)
+    if any(k in text for k in APPEND_INTENTS):
+        return True
+    # 「再帮我排一批 / 再给我排上一批 / 另排一单」中间夹「帮我/给我/安排」时「再排」不连续，
+    # 关键词命中不了，补一条保守正则：「再/另」后 6 字内出现「排」即视为追加。
+    if re.search(r"(?:再|另).{0,6}排", text):
+        return True
+    return False
 
 
 def _has_qty(o: dict) -> bool:

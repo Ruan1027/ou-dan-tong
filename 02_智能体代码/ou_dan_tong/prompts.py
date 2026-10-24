@@ -255,9 +255,9 @@ def pending_update_card_text(existing: dict, patch: dict) -> str:
         old_v = effective_delivery_date(existing) if k == "delivery_date" else existing.get(k)
         old_v = old_v if old_v not in (None, "") else "（空）"
         lines.append(f"· {cn}：{old_v} → {v}")
+    lines.append("")
     lines.append("· 回复「是」→ 确认修改，我改完再发一次订单信息；")
     lines.append("· 回复「否」→ 取消本次修改，台账保持原样。")
-    lines.append("")
     lines.append("请回复 是/否")
     return "\n".join(lines)
 
@@ -273,9 +273,9 @@ def disambig_card_text(order: dict, index: int, total: int) -> str:
     lines = [f"🟡 信息缺失，请确认：以下是否是您要查询/修改的订单？（第 {index}/{total} 个匹配）"]
     lines.append("── 订单数据 ──")
     lines.extend(_order_fields_block(order))
+    lines.append("")
     lines.append(f"· 回复「是」→ 以此订单为准，我给您更新后的信息；")
     lines.append(f"· 回复「否」→ {'继续查找其他匹配订单' if index < total else '已无更多匹配订单，将转接人工'}")
-    lines.append("")
     lines.append("请回复 是/否")
     return "\n".join(lines)
 

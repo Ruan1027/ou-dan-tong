@@ -64,7 +64,7 @@ def briefing_text(stats: dict) -> str:
     today = stats.get("date", "")
     lines = [f"📋 {today} 订单协同简报",
              f"🆕 新增订单：{stats['new']} 笔（{stats.get('new_customers','')}）",
-             f"💰 待报价：{stats['pending_quote']} 笔（最急：{stats.get('most_urgent','无')}）",
+             f"💬 沟通中（未定价）：{stats['pending_quote']} 笔（{stats.get('pending_list','无')}）",
              f"⏰ 临期交付：{stats['due_soon']} 笔（{stats.get('due_list','')}）",
              f"❗ 逾期任务：{stats['overdue']} 项（{stats.get('overdue_list','')}）"]
     return "\n".join(lines)

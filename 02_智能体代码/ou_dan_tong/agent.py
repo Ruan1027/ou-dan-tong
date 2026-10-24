@@ -8,7 +8,7 @@ import time
 from llm import LLM
 from prompts import (card_text, query_text, briefing_text, append_card_text,
                      missing_card_text, conflict_card_text, disambig_card_text,
-                     HUMAN_HANDOFF, STATUS_ORDER)
+                     nochange_card_text, HUMAN_HANDOFF, STATUS_ORDER)
 from store import Store
 from validator import validate_extraction, apply_change, classify_order, classify_task
 from contracts import CheckStatus, CHANGE_VERBS, APPEND_INTENTS, effective_delivery_date
@@ -139,7 +139,7 @@ def parse_chat(chat_text, store: Store, llm: LLM = None, mock=None, now: str = N
     first_new = next((i for i, (k, _) in enumerate(out) if k == "new"), None)
     for i, (kind, rec) in enumerate(out):
         if kind == "nochange":
-            cards.append(f"⏸️ 无变化：{rec['customer']}的{rec['product']} 数据已一致，未重复写入。")
+            cards.append(nochange_card_text(rec))
             continue
         if kind == "append":
             cards.append(append_card_text(rec))

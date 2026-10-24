@@ -214,6 +214,24 @@ def missing_card_text(order: dict, missing_msg: str, is_new: bool = True) -> str
 HUMAN_HANDOFF = "检测到订单存在疑问，接下来将转接人工。"
 
 
+def nochange_card_text(existing: dict) -> str:
+    """无变化卡片 —— 展示台账现值，说明为何没改（2026-10-24 应队长需求）。
+
+    旧版只输出「⏸️ 无变化：数据已一致，未重复写入」，客户看到会困惑：
+    「我明明要求改数量，为什么说没变化？」—— 多数是台账先前已更新成该值
+    （幂等去重），但客户看不到现值无从判断。现改为：
+      1. 逐行展示台账中这单的当前数据（数量/交期/状态等）；
+      2. 说明：您要求的数值与台账一致，所以未重复写入；
+      3. 引导：如果要改成别的数值，直接说目标值即可。
+    """
+    lines = [f"⏸️ 无变化 {existing.get('order_id','')}"]
+    lines.append("── 台账当前记录 ──")
+    lines.extend(_order_fields_block(existing))
+    lines.append("您提供的信息与台账记录一致，未重复写入。")
+    lines.append("💡 如果要改成其他数值，直接告诉我目标值即可（如「改成 100 个」）。")
+    return "\n".join(lines)
+
+
 def disambig_card_text(order: dict, index: int, total: int) -> str:
     """消歧卡片 —— 从候选订单中拿出一个问客户「是否是这个订单」。
 

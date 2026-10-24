@@ -506,6 +506,34 @@ def test_pipeline():
           [c["status"] for c in _cands])
     ck.ok(len(_cands) == 3, "T19 find_candidates 应返回3个王总的在途单（排除李姐+占位单）", len(_cands))
 
+    # ---------------- T20 无变化卡片展示台账现值（2026-10-24 应队长需求） ----------------
+    # 场景：客户要求「加到 80 个」而台账已是 80（先前已更新过）→ 幂等 nochange。
+    # 旧版只回「数据已一致，未重复写入」，客户困惑「我要求改了为什么说无变化」。
+    # 现要求：nochange 卡片必须展示台账现值（数量/交期/状态）+ 引导语。
+    ck.section("T20 无变化卡片：展示台账现值 + 引导")
+    s20 = Store(); s20.reset()
+    parse_chat("x", s20, mock=[_order(customer="李姐（瓯越五金贸易）", product="DZ47-63 三相断路器",
+                                      qty=80, unit_price="26", delivery_date="2026-10-27",
+                                      status_hint="已确认",
+                                      source_excerpt="李姐 DZ47 80个")], now=NOW)
+    _c20, _ = parse_chat("小陈，DZ47 那个加到 80 个", s20,
+                         mock=[_order(customer="李姐（瓯越五金贸易）", product="DZ47-63 三相断路器",
+                                      qty=80, unit_price="26", delivery_date="2026-10-27",
+                                      status_hint="已确认", intent="update",
+                                      source_excerpt="小陈，DZ47 那个加到 80 个")], now=NOW)
+    ck.ok("⏸️" in _c20 and "无变化" in _c20, "T20 同值变更应走无变化卡片", _c20[:80])
+    _oid20 = next((o["order_id"] for o in s20.orders
+                   if o["customer"] == "李姐（瓯越五金贸易）"), "")
+    ck.ok(_oid20 in _c20, "T20 无变化卡片应含订单号", _c20[:120])
+    ck.ok("👤 客户：李姐（瓯越五金贸易）" in _c20, "T20 应展示台账客户", _c20[:150])
+    ck.ok("📊 数量：×80" in _c20, "T20 应展示台账当前数量 80", _c20[:200])
+    ck.ok("📅 交期：2026-10-27" in _c20, "T20 应展示台账交期", _c20[:250])
+    ck.ok("未重复写入" in _c20, "T20 应说明未重复写入的原因", _c20[-160:])
+    ck.ok("目标值" in _c20, "T20 应引导客户改成其他目标值", _c20[-120:])
+    # 语义守护：nochange 不应篡改台账
+    _r20 = next((o for o in s20.orders if o["order_id"] == _oid20), None)
+    ck.ok(_r20 is not None and _r20["qty"] == 80, "T20 无变化后台账数量应保持 80", _r20 and _r20["qty"])
+
     ck.report()
     print("-" * 46)
     print(briefing(store))

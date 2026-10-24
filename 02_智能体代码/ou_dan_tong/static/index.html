@@ -64,12 +64,16 @@
   .cbtn { border:1px solid #cbd5e1; background:#fff; color:#0f172a; border-radius:10px;
           padding:8px 12px; font-size:13px; font-weight:600; cursor:pointer; }
   .cbtn:hover { background:#f1f5f9; }
-  .wx-input { display:flex; gap:8px; padding:10px 14px; background:#f7f7f7; border-top:1px solid #e0e0e0; }
+  /* align-items:flex-end：输入框随内容增高时，发言人框与发送按钮贴底不被拉伸 */
+  .wx-input { display:flex; align-items:flex-end; gap:8px; padding:10px 14px;
+              background:#f7f7f7; border-top:1px solid #e0e0e0; }
   /* 发言人输入框：平台直接面向顾客，发信人即客户本人，必须随消息一起传下去 */
   .wx-input .wx-sender { width:80px; flex:0 0 auto; height:42px; border:1px solid var(--line);
                          border-radius:10px; padding:0 10px; font-size:13px; font-family:inherit;
                          text-align:center; color:var(--brand2); font-weight:600; }
-  .wx-input textarea { flex:1; resize:none; height:42px; border:1px solid var(--line); border-radius:10px;
+  /* min/max-height + overflow：配合 autoGrow() 支持 Shift+Enter 多行，超过 120px 内部滚动 */
+  .wx-input textarea { flex:1; resize:none; min-height:42px; max-height:120px; overflow-y:auto;
+                       line-height:1.45; border:1px solid var(--line); border-radius:10px;
                        padding:9px 12px; font-size:14px; font-family:inherit; }
   .wx-input button { border:none; border-radius:10px; padding:0 18px; font-weight:600; cursor:pointer;
                      background:var(--brand); color:#fff; flex:0 0 auto; }
@@ -129,6 +133,78 @@
   .p-task  { flex:0 0 calc(22% - 8px); }
   .p-brief { flex:1 1 auto; }
   .p-brief .brief-btn { flex:0 0 auto; margin-bottom:8px; }
+  /* ===== 订单台账 · 筛选器（视觉参照 macOS 排序菜单）=====
+     注意：`.panel` 是 overflow:hidden，下拉若作为面板子元素会被直接裁掉，
+     所以菜单用 position:fixed 挂在 body 上，按按钮的 getBoundingClientRect() 定位。 */
+  .panel-tools { margin-left:auto; align-self:center; display:flex; align-items:center; gap:6px; flex:0 0 auto; }
+  .flt-btn { display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 9px;
+             border:1px solid var(--line); background:#f7f7f7; color:#334155; border-radius:9px;
+             font-size:12.5px; font-family:inherit; font-weight:600; cursor:pointer; white-space:nowrap; }
+  .flt-btn:hover { background:#f1f5f9; }
+  .flt-btn[aria-expanded="true"] { background:#eef2ff; border-color:#c7d2fe; color:var(--brand); }
+  .flt-btn .flt-ico { width:13px; height:13px; display:block; }
+  .flt-btn .chev { font-size:10px; color:var(--muted); margin-left:1px; }
+  .flt-badge { min-width:15px; height:15px; padding:0 4px; border-radius:999px; background:var(--brand);
+               color:#fff; font-size:10px; line-height:15px; text-align:center; font-weight:700; }
+  .flt-badge[hidden] { display:none; }
+
+  /* 宽度必须是确定值：两列 grid 的 1fr 需要父宽才能分配；窄视口用 100vw-24px 封顶，
+     与 placeFilterMenu() 的 8px 边距同源，绝不溢出 */
+  .flt-menu { position:fixed; z-index:60; width:min(480px, calc(100vw - 24px)); max-height:70vh; overflow:auto;
+              background:#fff; border:1px solid var(--line); border-radius:12px;
+              box-shadow:0 10px 30px rgba(15,23,42,.14); padding:6px 0; font-size:13px; }
+  .flt-menu[hidden] { display:none; }
+  .flt-title { padding:4px 14px 5px; font-size:11px; color:var(--muted); }
+  .flt-opt { display:flex; align-items:center; gap:8px; width:100%; padding:7px 14px;
+             border:0; background:transparent; font-size:13px; font-family:inherit;
+             color:#1f2937; text-align:left; cursor:pointer; }
+  .flt-opt:hover { background:#f1f5f9; }
+  .flt-opt .mk { flex:0 0 14px; width:14px; text-align:center; color:var(--brand); font-size:12px; }
+  /* min-width:0 是必须的：两列时列宽约 207px，原先的 max-width:252px 会横向溢出 */
+  .flt-opt .lb { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .flt-opt .arw { flex:0 0 auto; color:var(--muted); font-size:11px; }
+  .flt-sep { height:1px; background:var(--line); margin:6px 0; }
+  .flt-input { width:calc(100% - 28px); margin:2px 14px 6px; height:28px; padding:0 9px;
+               border:1px solid var(--line); border-radius:8px; font-size:12.5px; font-family:inherit; }
+  .flt-input:focus { outline:none; border-color:#c7d2fe; box-shadow:0 0 0 2px #eef2ff; }
+  .flt-sub { position:fixed; z-index:61; min-width:200px; max-height:50vh; overflow:auto;
+             background:#fff; border:1px solid var(--line); border-radius:10px;
+             box-shadow:0 10px 30px rgba(15,23,42,.14); padding:5px 0; }
+  .flt-sub[hidden] { display:none; }
+  .flt-reset { color:#b91c1c; }
+  /* .flt-opt 是 display:flex，会盖掉 UA 的 [hidden]{display:none}，「更多」靠 hidden 控制必须补这条 */
+  .flt-opt[hidden] { display:none; }
+
+  /* ---- 菜单两列分栏：左列状态+交期，右列客户+单号，重置跨列置底 ---- */
+  .flt-cols { display:grid; grid-template-columns:1fr 1fr; column-gap:10px; }
+  /* min-width:0 不能省：grid 的 1fr 隐含 min-width:auto(=min-content)，
+     长客户名会把列撑破，导致 ellipsis 失效、菜单超出 max-width */
+  .flt-col { min-width:0; }
+  @media (max-width: 480px) { .flt-cols { grid-template-columns:1fr; } }
+
+  /* ---- 客户搜索框（tag 嵌在输入框内部） ---- */
+  .flt-combo { display:flex; flex-wrap:wrap; align-items:center; gap:4px;
+               width:calc(100% - 28px); margin:2px 14px 6px; padding:3px 6px;
+               min-height:32px; border:1px solid var(--line); border-radius:8px;
+               font-size:12.5px; background:#fff; cursor:text; }
+  .flt-combo:focus-within { border-color:#c7d2fe; box-shadow:0 0 0 2px #eef2ff; }
+  .flt-combo input { flex:1 1 60px; min-width:60px; height:22px; border:0; outline:none;
+                     background:transparent; font:inherit; color:inherit; padding:0; }
+  .flt-tag { display:inline-flex; align-items:center; gap:4px; max-width:100%;
+             background:#e0e7ff; color:var(--brand2); border:1px solid #c7d2fe;
+             border-radius:999px; padding:1px 4px 1px 8px; font-size:11.5px; line-height:1.6; }
+  .flt-tag .tx { min-width:0; max-width:110px; overflow:hidden;
+                 text-overflow:ellipsis; white-space:nowrap; }
+  .flt-tag .x { border:0; background:transparent; color:var(--brand2); cursor:pointer;
+                font-size:12px; line-height:1; padding:0 3px; border-radius:999px; }
+  .flt-tag .x:hover { background:#c7d2fe; }
+
+  /* ---- 客户候选列表 ---- */
+  /* 必须自己滚：父级 .flt-menu 已是 70vh 上限，候选一多会把输入框滚出视口，
+     而用户正在打字。overscroll-behavior 防止滚动链传给父级造成双滚动条抢鼠标 */
+  .flt-cand { max-height:min(38vh, 240px); overflow:auto; overscroll-behavior:contain; }
+  .flt-cand-empty { padding:6px 14px 8px; color:var(--muted); font-size:12px; }
+  .flt-cand .flt-opt.hi { background:#eef2ff; }
 
   /* 台账表 + 表头吸顶（基础 table 样式见上「通用」段，此处不再重复定义）。
      订单台账加「单价」列后共 7 列：弃用 6 列时代的 table-layout:fixed + 百分比列宽
@@ -356,7 +432,20 @@
     <!-- 第二行：订单台账 / 任务台账 / 今日简报 —— 各自固定高度、内部滚动 -->
     <div class="p-row p-row-main">
       <div class="panel p-order">
-        <h3>📦 订单台账 <small id="pOrderCount"></small></h3>
+        <h3>📦 订单台账 <small id="pOrderCount"></small>
+          <span class="panel-tools">
+            <button type="button" class="flt-btn" id="ordFilterBtn" aria-haspopup="menu"
+                    aria-expanded="false" title="按状态 / 交期 / 客户 / 单号筛选订单">
+              <svg class="flt-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                   stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2 3h12L9.4 8.7V13L6.6 11.6V8.7L2 3z"/>
+              </svg>
+              <span>筛选</span>
+              <span class="flt-badge" id="ordFilterBadge" hidden>0</span>
+              <span class="chev">▾</span>
+            </button>
+          </span>
+        </h3>
         <div class="panel-body" id="pOrderTable"></div>
       </div>
       <div class="panel p-task">
@@ -681,12 +770,27 @@ function emptyState(icon, title, desc, eg){
 
 function renderOrderTable(orders){
   const box = el("pOrderTable"); if(!box) return;
-  orders = orders || (LAST_LEDGER && LAST_LEDGER.orders) || [];
-  box.innerHTML = orders.length ? (
-    "<table><tr><th>单号</th><th>客户</th><th>产品</th><th>数量</th><th>单价</th><th>交期</th><th>状态</th></tr>"+
-    orderRows(orders)+"</table>") : emptyState("📭", "台账还没有订单",
+  const all = (LAST_LEDGER && LAST_LEDGER.orders) || [];
+  /* 无参调用（展开变更履历 / 查询定位 / 简报定位后的重渲染）也必须取「筛选后」集合，
+     否则一展开履历就把当前筛选条件冲掉了 */
+  orders = orders || filterOrders(all, ORDER_FILTER);
+  if(orders.length){
+    /* 7 列：单价由 dev-d 合入，位于数量与交期之间，勿回退成 6 列 */
+    box.innerHTML = "<table><tr><th>单号</th><th>客户</th><th>产品</th><th>数量</th><th>单价</th><th>交期</th><th>状态</th></tr>"+
+      orderRows(orders)+"</table>";
+  }else if(all.length){
+    /* 有单但被筛没了：必须和「真没单」区分开，否则用户以为数据丢了 */
+    box.innerHTML = '<div class="empty-state">'+
+      '<div class="es-icon">🔎</div>'+
+      '<div class="es-title">当前筛选无匹配订单</div>'+
+      '<div class="es-desc">共 '+all.length+' 笔订单，被当前筛选条件全部挡住。</div>'+
+      '<div class="es-eg"><button type="button" class="flt-btn" onclick="resetOrderFilter()">重置筛选</button></div>'+
+      '</div>';
+  }else{
+    box.innerHTML = emptyState("📭", "台账还没有订单",
       "客户在「💬 微信沟通」页发来订单消息后，这里会自动生成订单行并持续跟踪变更。",
       "「小陈，法兰 DN80 250 个，28 号前要」");
+  }
   applyHit(false);   /* 重渲染后把当前定位高亮补回去，避免刷新就把人看丢了 */
 }
 
@@ -728,10 +832,12 @@ function renderPlatform(L){
     return;
   }
   LAST_LEDGER = L;
-  const orders=L.orders||[], tasks=L.tasks||[];
+  const tasks=L.tasks||[];
   if(el("modeBadge")) el("modeBadge").textContent = L.mode||"";
   el("pTaskCount").textContent = "（"+tasks.length+" 项）";
-  renderOrderTable(orders);
+  /* 订单计数与表格统一走 refreshOrderView：它会带上当前筛选条件，
+     并负责写入 pOrderCount（合并后这里曾漏掉，导致标题旁计数一直为空） */
+  refreshOrderView();
   el("pTaskTable").innerHTML = tasks.length ? (
     "<table><tr><th>事项</th><th>责任人</th><th>期限</th><th>状态</th></tr>"+
     taskRows(tasks)+"</table>") : emptyState("🗂️", "台账还没有任务",
@@ -1281,15 +1387,16 @@ function refreshOrderView(){
   if(badge){ badge.hidden = !dims; badge.textContent = String(dims); }
 }
 
-/* 查询命中被筛选挡住时，先清筛选再跳转 —— 绝不让高亮静默失效 */
-function ensureVisible(ids){
+/* 查询命中被筛选挡住时，先清筛选再跳转 —— 绝不让高亮静默失效
+   opts.quiet：不自己弹 toast，把提示交由调用方合并（toast 是单槽，否则必被覆盖） */
+function ensureVisible(ids, opts){
   if(!ids || !ids.length) return false;
   const all = (LAST_LEDGER && LAST_LEDGER.orders) || [];
   const shown = new Set(filterOrders(all, ORDER_FILTER).map(function(o){ return o.order_id; }));
   const hidden = ids.filter(function(id){ return !shown.has(id); });
   if(!hidden.length) return false;
   resetOrderFilter({ silent: true });
-  toast("🔎 已清空筛选，以显示查询命中的订单");
+  if(!(opts && opts.quiet)) toast("🔎 已清空筛选，以显示查询命中的订单");
   return true;
 }
 
@@ -1327,6 +1434,11 @@ function applyQuery(data){
   const f = (data && data.focus) || {};
   const ids = Array.isArray(f.order_ids) ? f.order_ids.slice() : [];
   const kind = f.kind || "";
+  /* 命中单若被当前筛选挡住，先清筛选再跳转，否则高亮会静默消失。
+     toast 是单槽（后写覆盖前写），所以这里静默清筛选，把提示合并进下方各自的 toast */
+  const flushed = ids.length && (kind === "orders" || kind === "history" || kind === "clarify")
+    ? ensureVisible(ids, { quiet:true }) : false;
+  const tip = flushed ? "🧹 已清空筛选 · " : "";
 
   if(data.mode === "briefing" || kind === "briefing"){
     renderBriefing(el("briefResult"), stripNote(data.reply||"（无结果）"));
@@ -1338,18 +1450,18 @@ function applyQuery(data){
     if(kind === "history") ids.forEach(id=>histOpen.add(id));   /* 履历查询：连子单一起展开 */
     renderOrderTable();
     applyHit(true);
-    toast(kind === "history"
+    toast(tip + (kind === "history"
       ? `📜 已定位 <span class="tk">${esc(ids[0])}</span> 并展开变更履历（子单）`
       : ids.length > 1
         ? `🔍 命中 <span class="tk">${ids.length}</span> 笔，已在台账中高亮`
-        : `🔍 已定位 <span class="tk">${esc(ids[0])}</span>，台账中浅蓝高亮`);
+        : `🔍 已定位 <span class="tk">${esc(ids[0])}</span>，台账中浅蓝高亮`));
     return;
   }
   if(kind === "clarify" && ids.length){
     HIT_IDS = ids;
     renderOrderTable(); applyHit(true);
     note(stripNote(data.reply||""), "info");
-    toast(`🤔 ${ids.length} 笔都匹配，请补充产品名或单号`);
+    toast(tip + `🤔 ${ids.length} 笔都匹配，请补充产品名或单号`);
     return;
   }
   if(kind === "fallback"){
@@ -1360,8 +1472,11 @@ function applyQuery(data){
       .map(o=>o.order_id);
     if(all.length){
       HIT_IDS = all;
+      /* 文案说的是「全部在途单」，就必须真让它们全部可见 */
+      const f2 = ensureVisible(all, { quiet:true });
       renderOrderTable(); applyHit(true);
-      note("未精确命中，已在台账高亮全部在途单（"+all.length+" 笔）。换个称呼或按产品问更准，如「法兰那单到哪了」。", "info");
+      note((f2 ? "（已清空筛选以显示全部在途单）" : "") +
+        "未精确命中，已在台账高亮全部在途单（"+all.length+" 笔）。换个称呼或按产品问更准，如「法兰那单到哪了」。", "info");
       return;
     }
     note(stripNote(data.reply||"（无结果）"));
@@ -1518,8 +1633,11 @@ function briefHit(texts){
     return;
   }
   HIT_IDS = ids;
+  /* 目标单可能正被筛选挡住：先清筛选再定位，否则 applyHit 找不到 <tr>，高亮静默失效。
+     注意只在「有命中」这一支做——上面的「点『无』取消高亮」绝不能动用户的筛选条件 */
+  const flushed = ensureVisible(ids, { quiet:true });
   renderOrderTable(); applyHit(true);
-  toast(`📍 已在订单台账定位 ${ids.length} 笔关联订单`);
+  toast((flushed ? "🧹 已清空筛选 · " : "") + `📍 已在订单台账定位 ${ids.length} 笔关联订单`);
 }
 /* 点击简报行：直接在「订单台账」页面内定位并加深对应订单的背景（不新开弹窗/窗口）。 */
 function renderBriefing(out, text){
@@ -1629,8 +1747,9 @@ async function resetAll(){
     await apiPost("/api/reset");
     if(el("wxChat")) el("wxChat").innerHTML="";
     if(el("briefResult")) el("briefResult").textContent="点击上方按钮生成今日简报。";
-    /* 台账清空后旧的定位/展开状态必须一起清掉，否则会指向不存在的单 */
+    /* 台账清空后旧的定位/展开/筛选状态必须一起清掉，否则会指向不存在的单或筛出空表 */
     HIT_IDS = []; histOpen.clear(); note("");
+    resetOrderFilter({ silent:true });   /* 必须在 refreshPlatform 之前：否则首屏会带着旧筛选条件 */
     addWx("agent","台账已清空，可重新模拟客户发消息。","hint");
     await refreshPlatform();
   }catch(e){ showErr("重置失败："+e.message); }

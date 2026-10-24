@@ -254,6 +254,17 @@ def test_pipeline():
     ck.ok(s8.tasks[0]["task_id"].startswith("TSK-"), "T13 任务号格式应为 TSK-*",
           s8.tasks[0].get("task_id"))
     ck.ok(s8.tasks[0]["owner"] == "老周", "T13 任务应保留负责人", s8.tasks[0].get("owner"))
+    # BUG-13 晋升（2026-10-24，探针已转绿 -> 硬断言）：任务与订单同口径幂等——
+    # 同一段消息二次导入，任务不得重复入库、任务号不得漂移。
+    # 此前只挂在 test_defects 探针（退出码 0 不阻断），回归会悄悄漏掉。
+    _t13_id = s8.tasks[0]["task_id"]
+    parse_chat("x", s8, mock=[
+        {"type": "task", "task_content": "跟进物流单号", "owner": "老周",
+         "task_deadline": "2026-10-22"}], now=NOW)
+    ck.ok(len(s8.tasks) == 1, "T13 任务幂等：同消息二次导入不新增任务",
+          [t.get("task_id") for t in s8.tasks])
+    ck.ok(s8.tasks[0]["task_id"] == _t13_id, "T13 任务幂等：任务号不漂移",
+          f"{_t13_id} -> {s8.tasks[0]['task_id']}")
 
     # ---------------- T14 批次交期契约（D-1/D-3，PR #14 合入） ----------------
     # 批次交期的**单一真相源**是 contracts.effective_delivery_date —— A-2（validator 冲突比对）
